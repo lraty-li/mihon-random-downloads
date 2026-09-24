@@ -5,38 +5,12 @@ import java.util.concurrent.ConcurrentHashMap
 
 internal class LocalDownloadRepository(
     private val scanner: ReadOnlyDownloadScanner = ReadOnlyDownloadScanner(),
+    private val index: MihonDownloadIndexCacheReader = MihonDownloadIndexCacheReader(),
 ) {
 
     private val knownManga = ConcurrentHashMap<String, DownloadedManga>()
-    private val sourceDirectoryCache = ConcurrentHashMap<String, DocumentNode>()
 
-    @Volatile
-    private var sources: List<DocumentNode>? = null
-
-    fun random(limit: Int): List<DownloadedManga> {
-        if (limit <= 0) return emptyList()
-
-        val result = linkedMapOf<String, DownloadedManga>()
-
-        sourceDirectories()
-            .shuffled()
-            .forEach { sourceDir ->
-                if (result.size >= limit) return@forEach
-
-                val remaining = limit - result.size
-                val take = minOf(PER_SOURCE_SAMPLE, remaining)
-
-                scanner.listDirectories(sourceDir.uri)
-                    .shuffled()
-                    .take(take)
-                    .forEach { mangaDir ->
-                        val manga = remember(sourceDir, mangaDir)
-                        result[manga.ref.mangaUrl] = manga
-                    }
-            }
-
-        return result.values.take(limit)
-    }
+    fun random(limit: Int): List<DownloadedManga> = index.random(limit).onEach(::remember)
 
     fun searchKnown(query: String, limit: Int): List<DownloadedManga> {
         val normalized = query.trim()
@@ -59,16 +33,9 @@ internal class LocalDownloadRepository(
     fun resolveManga(ref: MangaRef): DownloadedManga? {
         knownManga[ref.mangaUrl]?.let { return it }
 
-        val sourceDir = sourceDirectoryCache[ref.sourceName]
-            ?: sourceDirectories()
-                .firstOrNull { it.name == ref.sourceName }
-                ?.also { sourceDirectoryCache[ref.sourceName] = it }
-            ?: return null
-
-        val mangaDir = scanner.findDirectory(sourceDir.uri, ref.mangaName)
-            ?: return null
-
-        return remember(sourceDir, mangaDir)
+        return runCatching {
+            index.find(ref)
+        }.getOrNull()?.let(::remember)
     }
 
     fun listChapters(ref: MangaRef): List<DownloadedChapter> {
@@ -157,39 +124,12 @@ internal class LocalDownloadRepository(
 
     fun scanner(): ReadOnlyDownloadScanner = scanner
 
-    private fun sourceDirectories(): List<DocumentNode> {
-        sources?.let { return it }
-
-        return synchronized(this) {
-            sources ?: scanner.listDirectories(scanner.downloadsRoot().uri)
-                .also { loaded ->
-                    loaded.forEach { sourceDirectoryCache[it.name] = it }
-                    sources = loaded
-                }
-        }
-    }
-
     private fun remember(manga: DownloadedManga): DownloadedManga {
         knownManga[manga.ref.mangaUrl] = manga
         return manga
     }
 
-    private fun remember(
-        sourceDir: DocumentNode,
-        mangaDir: DocumentNode,
-    ): DownloadedManga = remember(
-        DownloadedManga(
-            ref = MangaRef(
-                sourceName = sourceDir.name,
-                mangaName = mangaDir.name,
-            ),
-            uri = mangaDir.uri,
-        ),
-    )
-
     companion object {
-        private const val PER_SOURCE_SAMPLE = 5
-
         private val COVER_NAMES = setOf(
             "cover.jpg",
             "cover.jpeg",
