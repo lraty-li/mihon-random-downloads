@@ -7,46 +7,36 @@ import java.nio.charset.StandardCharsets
 internal const val LOCAL_ASSET_HOST = "random-downloads.invalid"
 internal const val LOCAL_ASSET_BASE = "https://$LOCAL_ASSET_HOST"
 
-internal data class ExistingManga(
-    val id: Long,
-    val sourceId: Long,
-    val title: String,
+internal data class MangaRef(
     val sourceName: String,
-    val thumbnailUrl: String?,
-    val author: String?,
-    val artist: String?,
-    val description: String?,
-    val status: Int,
-    val mangaDirectoryUri: Uri,
+    val mangaName: String,
 ) {
-    val syntheticUrl: String
-        get() = "/m/$id"
+    val mangaUrl: String
+        get() = "/m/${encodePart(sourceName)}/${encodePart(mangaName)}"
+
+    val coverUrl: String
+        get() = "$LOCAL_ASSET_BASE/cover/${encodePart(sourceName)}/${encodePart(mangaName)}"
 }
 
-internal data class DatabaseManga(
-    val id: Long,
-    val sourceId: Long,
-    val title: String,
-    val thumbnailUrl: String?,
-    val author: String?,
-    val artist: String?,
-    val description: String?,
-    val status: Int,
+internal data class DownloadedManga(
+    val ref: MangaRef,
+    val uri: Uri,
 )
 
-internal data class DatabaseChapter(
-    val id: Long,
-    val mangaId: Long,
-    val url: String,
-    val name: String,
-    val scanlator: String?,
-    val chapterNumber: Float,
-    val dateUpload: Long,
-    val sourceOrder: Long,
+internal data class ChapterRef(
+    val manga: MangaRef,
+    val documentName: String,
 ) {
-    val syntheticUrl: String
-        get() = "/c/$mangaId/$id"
+    val chapterUrl: String
+        get() = "/c/${encodePart(manga.sourceName)}/${encodePart(manga.mangaName)}/${encodePart(documentName)}"
 }
+
+internal data class DownloadedChapter(
+    val ref: ChapterRef,
+    val displayName: String,
+    val uri: Uri,
+    val isDirectory: Boolean,
+)
 
 internal data class DocumentNode(
     val uri: Uri,
@@ -54,27 +44,43 @@ internal data class DocumentNode(
     val isDirectory: Boolean,
 )
 
-internal data class DownloadedChapterRef(
-    val chapter: DatabaseChapter,
-    val document: DocumentNode,
-)
+internal sealed interface LocalImageTarget {
+    data class File(
+        val uri: Uri,
+        val name: String,
+    ) : LocalImageTarget
 
-internal data class DownloadDirectoryIndex(
-    val mangaDirsBySource: Map<String, Map<String, Uri>>,
-)
-
-internal fun parseMangaId(url: String): Long? {
-    val parts = url.substringBefore('?').trim('/').split('/')
-    if (parts.size != 2 || parts[0] != "m") return null
-    return parts[1].toLongOrNull()
+    data class ArchiveEntry(
+        val archiveUri: Uri,
+        val entryName: String,
+    ) : LocalImageTarget
 }
 
-internal fun parseChapterIds(url: String): Pair<Long, Long>? {
+internal fun parseMangaUrl(url: String): MangaRef? {
     val parts = url.substringBefore('?').trim('/').split('/')
-    if (parts.size != 3 || parts[0] != "c") return null
-    val mangaId = parts[1].toLongOrNull() ?: return null
-    val chapterId = parts[2].toLongOrNull() ?: return null
-    return mangaId to chapterId
+    if (parts.size != 3 || parts[0] != "m") return null
+
+    return runCatching {
+        MangaRef(
+            sourceName = decodePart(parts[1]),
+            mangaName = decodePart(parts[2]),
+        )
+    }.getOrNull()
+}
+
+internal fun parseChapterUrl(url: String): ChapterRef? {
+    val parts = url.substringBefore('?').trim('/').split('/')
+    if (parts.size != 4 || parts[0] != "c") return null
+
+    return runCatching {
+        ChapterRef(
+            manga = MangaRef(
+                sourceName = decodePart(parts[1]),
+                mangaName = decodePart(parts[2]),
+            ),
+            documentName = decodePart(parts[3]),
+        )
+    }.getOrNull()
 }
 
 internal fun filePageUrl(uri: Uri, name: String): String = "$LOCAL_ASSET_BASE/file/${encodePart(uri.toString())}/${encodePart(name)}"
@@ -151,4 +157,14 @@ internal fun imageMediaType(name: String): String = when (
 internal fun isImageName(name: String): Boolean {
     val extension = name.substringAfterLast('.', missingDelimiterValue = "").lowercase()
     return extension in setOf("jpg", "jpeg", "png", "webp", "gif", "avif", "heic", "heif")
+}
+
+internal fun chapterDisplayName(fileName: String): String {
+    val withoutExtension = fileName
+        .removeSuffix(".cbz")
+        .removeSuffix(".CBZ")
+        .removeSuffix(".zip")
+        .removeSuffix(".ZIP")
+
+    return withoutExtension.replace(Regex("""_[0-9a-fA-F]{6}$"""), "")
 }

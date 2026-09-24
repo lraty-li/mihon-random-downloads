@@ -16,8 +16,11 @@ import java.io.FilterInputStream
 import java.io.InputStream
 
 internal class LocalReadInterceptor(
-    private val scanner: ReadOnlyDownloadScanner,
+    private val repository: LocalDownloadRepository,
 ) : Interceptor {
+
+    private val scanner
+        get() = repository.scanner()
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
@@ -28,25 +31,60 @@ internal class LocalReadInterceptor(
         }
 
         val segments = url.pathSegments
-        if (segments.size != 3) {
-            return notFound(chain)
-        }
 
         return runCatching {
-            when (segments[0]) {
-                "file" -> {
+            when {
+                segments.size == 3 && segments[0] == "file" -> {
                     val uri = Uri.parse(decodePart(segments[1]))
                     val name = decodePart(segments[2])
-                    val input = scanner.openInputStream(uri)
-                    streamResponse(chain, input, name)
+                    streamResponse(
+                        chain = chain,
+                        input = scanner.openInputStream(uri),
+                        name = name,
+                    )
                 }
 
-                "archive" -> {
+                segments.size == 3 && segments[0] == "archive" -> {
                     val uri = Uri.parse(decodePart(segments[1]))
                     val entryName = decodePart(segments[2])
                     val input = openArchiveEntry(uri, entryName)
                         ?: return@runCatching notFound(chain)
-                    streamResponse(chain, input, entryName)
+
+                    streamResponse(
+                        chain = chain,
+                        input = input,
+                        name = entryName,
+                    )
+                }
+
+                segments.size == 3 && segments[0] == "cover" -> {
+                    val ref = MangaRef(
+                        sourceName = decodePart(segments[1]),
+                        mangaName = decodePart(segments[2]),
+                    )
+
+                    when (val target = repository.coverTarget(ref)) {
+                        is LocalImageTarget.File -> streamResponse(
+                            chain = chain,
+                            input = scanner.openInputStream(target.uri),
+                            name = target.name,
+                        )
+
+                        is LocalImageTarget.ArchiveEntry -> {
+                            val input = openArchiveEntry(
+                                uri = target.archiveUri,
+                                entryName = target.entryName,
+                            ) ?: return@runCatching notFound(chain)
+
+                            streamResponse(
+                                chain = chain,
+                                input = input,
+                                name = target.entryName,
+                            )
+                        }
+
+                        null -> notFound(chain)
+                    }
                 }
 
                 else -> notFound(chain)

@@ -16,96 +16,23 @@ internal class ReadOnlyDownloadScanner(
     private val resolver
         get() = context.contentResolver
 
-    fun scan(): DownloadDirectoryIndex {
+    fun downloadsRoot(): DocumentNode {
         val treeUri = storageTreeUri()
         val rootDocumentUri = DocumentsContract.buildDocumentUriUsingTree(
             treeUri,
             DocumentsContract.getTreeDocumentId(treeUri),
         )
 
-        val downloads = listChildren(rootDocumentUri)
-            .firstOrNull { it.isDirectory && it.name == DOWNLOADS_DIR }
+        return findDirectory(rootDocumentUri, DOWNLOADS_DIR)
             ?: error("Mihon downloads directory was not found.")
-
-        val mangaDirsBySource = listChildren(downloads.uri)
-            .asSequence()
-            .filter { it.isDirectory }
-            .associate { sourceDir ->
-                sourceDir.name.lowercase() to
-                    listChildren(sourceDir.uri)
-                        .asSequence()
-                        .filter { it.isDirectory }
-                        .associate { mangaDir ->
-                            mangaDir.name to mangaDir.uri
-                        }
-            }
-
-        return DownloadDirectoryIndex(mangaDirsBySource)
     }
 
-    fun findChapterDocument(
-        mangaDirectoryUri: Uri,
-        validNames: List<String>,
-    ): DocumentNode? {
-        val byName = listChildren(mangaDirectoryUri)
-            .associateBy { it.name }
+    fun listDirectories(parentUri: Uri): List<DocumentNode> = listChildren(parentUri).filter { it.isDirectory }
 
-        return validNames.firstNotNullOfOrNull(byName::get)
-    }
-
-    fun listImages(directoryUri: Uri): List<DocumentNode> = listChildren(directoryUri)
-        .filter { !it.isDirectory && isImageName(it.name) }
-        .sortedWith { left, right -> naturalCompare(left.name, right.name) }
-
-    fun listArchiveImageEntries(archiveUri: Uri): List<String> {
-        val entries = mutableListOf<String>()
-
-        openInputStream(archiveUri).use { raw ->
-            ZipInputStream(BufferedInputStream(raw)).use { zip ->
-                while (true) {
-                    val entry = zip.nextEntry ?: break
-                    try {
-                        if (!entry.isDirectory && isImageName(entry.name)) {
-                            entries += entry.name
-                        }
-                    } finally {
-                        zip.closeEntry()
-                    }
-                }
-            }
-        }
-
-        return entries.sortedWith(Comparator(::naturalCompare))
-    }
-
-    fun openInputStream(uri: Uri): InputStream = resolver.openInputStream(uri)
-        ?: error("Unable to open document: $uri")
-
-    fun openFileDescriptor(uri: Uri): ParcelFileDescriptor = resolver.openFileDescriptor(uri, "r")
-        ?: error("Unable to open file descriptor: $uri")
-
-    private fun storageTreeUri(): Uri {
-        val prefs = context.getSharedPreferences(
-            "${context.packageName}_preferences",
-            Context.MODE_PRIVATE,
-        )
-
-        val raw = sequenceOf(
-            prefs.getString(STORAGE_KEY, null),
-            prefs.getString(LEGACY_STORAGE_KEY, null),
-            prefs.all
-                .entries
-                .firstOrNull { entry ->
-                    entry.key.endsWith("storage_dir") &&
-                        entry.value is String &&
-                        (entry.value as String).startsWith("content://")
-                }
-                ?.value as? String,
-        ).firstOrNull { !it.isNullOrBlank() }
-            ?: error("Mihon storage location is not configured.")
-
-        return Uri.parse(raw)
-    }
+    fun findDirectory(
+        parentUri: Uri,
+        name: String,
+    ): DocumentNode? = listDirectories(parentUri).firstOrNull { it.name == name }
 
     fun listChildren(parentUri: Uri): List<DocumentNode> {
         val treeUri = storageTreeUri()
@@ -155,6 +82,76 @@ internal class ReadOnlyDownloadScanner(
                 }
             }
         }
+    }
+
+    fun listImages(directoryUri: Uri): List<DocumentNode> = listChildren(directoryUri)
+        .filter { !it.isDirectory && isImageName(it.name) }
+        .sortedWith { left, right -> naturalCompare(left.name, right.name) }
+
+    fun listArchiveImageEntries(archiveUri: Uri): List<String> {
+        val entries = mutableListOf<String>()
+
+        openInputStream(archiveUri).use { raw ->
+            ZipInputStream(BufferedInputStream(raw)).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    try {
+                        if (!entry.isDirectory && isImageName(entry.name)) {
+                            entries += entry.name
+                        }
+                    } finally {
+                        zip.closeEntry()
+                    }
+                }
+            }
+        }
+
+        return entries.sortedWith(Comparator(::naturalCompare))
+    }
+
+    fun firstArchiveImageEntry(archiveUri: Uri): String? {
+        openInputStream(archiveUri).use { raw ->
+            ZipInputStream(BufferedInputStream(raw)).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: return null
+                    try {
+                        if (!entry.isDirectory && isImageName(entry.name)) {
+                            return entry.name
+                        }
+                    } finally {
+                        zip.closeEntry()
+                    }
+                }
+            }
+        }
+    }
+
+    fun openInputStream(uri: Uri): InputStream = resolver.openInputStream(uri)
+        ?: error("Unable to open document: $uri")
+
+    fun openFileDescriptor(uri: Uri): ParcelFileDescriptor = resolver.openFileDescriptor(uri, "r")
+        ?: error("Unable to open file descriptor: $uri")
+
+    private fun storageTreeUri(): Uri {
+        val prefs = context.getSharedPreferences(
+            "${context.packageName}_preferences",
+            Context.MODE_PRIVATE,
+        )
+
+        val raw = sequenceOf(
+            prefs.getString(STORAGE_KEY, null),
+            prefs.getString(LEGACY_STORAGE_KEY, null),
+            prefs.all.entries
+                .firstOrNull { entry ->
+                    entry.key.endsWith("storage_dir") &&
+                        entry.value is String &&
+                        (entry.value as String).startsWith("content://")
+                }
+                ?.value as? String,
+        ).firstOrNull { !it.isNullOrBlank() }
+            ?: error("Mihon storage location is not configured.")
+
+        return Uri.parse(raw)
     }
 
     companion object {

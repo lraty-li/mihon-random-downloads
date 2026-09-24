@@ -1,5 +1,7 @@
 package eu.kanade.tachiyomi.extension.all.randomdownloads
 
+import android.os.SystemClock
+import android.util.Log
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
@@ -14,8 +16,8 @@ import okhttp3.OkHttpClient
 @Source
 abstract class RandomDownloads : KeiSource() {
 
-    private val downloadedIndex = ExistingDownloadedMangaIndex()
-    private val localReadInterceptor = LocalReadInterceptor(downloadedIndex.scanner())
+    private val repository = LocalDownloadRepository()
+    private val localReadInterceptor = LocalReadInterceptor(repository)
 
     override val supportsLatest: Boolean
         get() = false
@@ -27,12 +29,16 @@ abstract class RandomDownloads : KeiSource() {
             return MangasPage(emptyList(), hasNextPage = false)
         }
 
-        val manga = downloadedIndex
-            .random(RANDOM_PAGE_SIZE)
-            .map(::toSManga)
+        val startedAt = SystemClock.elapsedRealtime()
+        val items = repository.random(RANDOM_PAGE_SIZE)
+
+        Log.i(
+            TAG,
+            "Random page: count=${items.size}, elapsed=${SystemClock.elapsedRealtime() - startedAt}ms",
+        )
 
         return MangasPage(
-            mangas = manga,
+            mangas = items.map(::toSManga),
             hasNextPage = false,
         )
     }
@@ -48,20 +54,17 @@ abstract class RandomDownloads : KeiSource() {
             return MangasPage(emptyList(), hasNextPage = false)
         }
 
-        val manga = downloadedIndex
-            .search(query)
-            .take(MAX_SEARCH_RESULTS)
-            .map(::toSManga)
-
         return MangasPage(
-            mangas = manga,
+            mangas = repository
+                .searchKnown(query, MAX_SEARCH_RESULTS)
+                .map(::toSManga),
             hasNextPage = false,
         )
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val mangaId = parseMangaId(url.encodedPath) ?: return null
-        return downloadedIndex.get(mangaId)?.let(::toSManga)
+        val ref = parseMangaUrl(url.encodedPath) ?: return null
+        return repository.resolveManga(ref)?.let(::toSManga)
     }
 
     override suspend fun fetchMangaUpdate(
@@ -70,22 +73,24 @@ abstract class RandomDownloads : KeiSource() {
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val mangaId = parseMangaId(manga.url)
+        val ref = parseMangaUrl(manga.url)
             ?: return SMangaUpdate(manga, chapters)
 
-        val existing = downloadedIndex.get(mangaId)
+        val local = repository.resolveManga(ref)
             ?: return SMangaUpdate(manga, chapters)
 
         val updatedManga = if (fetchDetails) {
-            toSManga(existing)
+            toSManga(local).apply {
+                description = "本地下载来源：${ref.sourceName}"
+            }
         } else {
             manga
         }
 
         val updatedChapters = if (fetchChapters) {
-            downloadedIndex
-                .downloadedChapters(mangaId)
-                .map { it.chapter.toSChapter() }
+            repository
+                .listChapters(ref)
+                .map(::toSChapter)
         } else {
             chapters
         }
@@ -97,19 +102,15 @@ abstract class RandomDownloads : KeiSource() {
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val (mangaId, chapterId) = parseChapterIds(chapter.url)
+        val ref = parseChapterUrl(chapter.url)
             ?: error("Invalid local chapter URL: ${chapter.url}")
 
-        val downloaded = downloadedIndex.downloadedChapter(
-            mangaId = mangaId,
-            chapterId = chapterId,
-        ) ?: error("Downloaded chapter no longer exists")
+        val local = repository.resolveChapter(ref)
+            ?: error("Downloaded chapter no longer exists")
 
-        val document = downloaded.document
-
-        return if (document.isDirectory) {
-            downloadedIndex
-                .listFolderImages(document.uri)
+        return if (local.isDirectory) {
+            repository
+                .listFolderImages(local.uri)
                 .mapIndexed { index, image ->
                     Page(
                         index = index,
@@ -117,44 +118,30 @@ abstract class RandomDownloads : KeiSource() {
                     )
                 }
         } else {
-            downloadedIndex
-                .listArchiveImages(document.uri)
+            repository
+                .listArchiveImages(local.uri)
                 .mapIndexed { index, entryName ->
                     Page(
                         index = index,
-                        imageUrl = archivePageUrl(document.uri, entryName),
+                        imageUrl = archivePageUrl(local.uri, entryName),
                     )
                 }
         }
     }
 
-    private fun toSManga(manga: ExistingManga): SManga = SManga.create().apply {
-        url = manga.syntheticUrl
-        title = manga.title
-        thumbnail_url = manga.thumbnailUrl
-        author = manga.author
-        artist = manga.artist
-        description = buildString {
-            manga.description?.takeIf { it.isNotBlank() }?.let {
-                append(it)
-                append("\n\n")
-            }
-            append("本地下载来源：")
-            append(manga.sourceName)
-        }
-        status = manga.status
-        initialized = true
+    private fun toSManga(manga: DownloadedManga): SManga = SManga.create().apply {
+        url = manga.ref.mangaUrl
+        title = manga.ref.mangaName
+        thumbnail_url = manga.ref.coverUrl
     }
 
-    private fun DatabaseChapter.toSChapter(): SChapter = SChapter.create().apply {
-        url = syntheticUrl
-        name = this@toSChapter.name
-        scanlator = this@toSChapter.scanlator
-        chapter_number = chapterNumber
-        date_upload = dateUpload
+    private fun toSChapter(chapter: DownloadedChapter): SChapter = SChapter.create().apply {
+        url = chapter.ref.chapterUrl
+        name = chapter.displayName
     }
 
     companion object {
+        private const val TAG = "RandomDownloads"
         private const val RANDOM_PAGE_SIZE = 20
         private const val MAX_SEARCH_RESULTS = 200
     }
