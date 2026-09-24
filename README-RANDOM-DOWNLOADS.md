@@ -1,72 +1,69 @@
 # Mihon Random Downloads
 
-Personal Mihon source extension that treats Mihon's existing download directory as a virtual source.
+Personal Mihon extension for opening a random selection of manga that already have local downloads.
 
-## PoC goal
+## Current design
 
-- Browse -> show 20 random manga from all entries under Mihon's `downloads/` directory.
-- Search -> search downloaded manga/source directory names.
-- Manga details -> list locally downloaded chapters.
-- Reader -> open downloaded chapter folders or CBZ files without contacting the original source.
-- Covers -> use the first readable image from a downloaded chapter.
+The old virtual-source PoC was removed because Mihon's normal source browsing pipeline persists returned
+network manga as a separate source identity. That caused incorrect downloaded/read state.
 
-## How it works
+Version 1.6.3 uses the extension's **Settings** screen instead:
 
-The extension runs inside Mihon and reads Mihon's configured Storage Access Framework tree URI from the host app's default preferences. It then traverses:
+1. Open Mihon's existing `tachiyomi.db` with SQLite `OPEN_READONLY`.
+2. Read existing manga IDs, source IDs, and titles.
+3. Read only the two directory levels under Mihon's existing `downloads/<source>/<manga>` tree.
+4. Use Mihon's existing `DownloadProvider` naming functions to match download folders back to original manga rows.
+5. Keep the matched list only in process memory.
+6. Randomly show 20 original manga entries in the extension Settings screen.
+7. Clicking an item launches Mihon's existing `SHOW_MANGA` action with the original manga ID.
 
-```text
-<storage>/
-  downloads/
-    <source>/
-      <manga>/
-        <chapter>.cbz
-        <chapter>/
-          001.jpg
-          ...
-```
+The normal source Browse/Search APIs intentionally return an empty list so they cannot create virtual or
+duplicate manga entries.
 
-Mihon expects HTTP image URLs from a normal source. The extension therefore exposes fake URLs under
-`https://random-downloads.invalid/` and intercepts them with its own OkHttp interceptor.
+## Write-safety rules
 
-For chapter reading, pages are staged into Mihon's cache directory. CBZ archives are extracted only when a
-chapter is opened; the staged chapter cache is capped at roughly 512 MiB.
+Runtime plugin code must not:
+
+- create an index/cache/record file;
+- create, rename, delete, extract, or modify manga/download files;
+- write to Mihon's manga/chapter/download tables;
+- generate fake local chapters/pages;
+- use the previous CBZ extraction/image-interceptor path.
+
+The directory scan uses `DocumentsContract` queries only. The database connection is opened with
+`SQLiteDatabase.OPEN_READONLY`.
+
+Mihon's own normal UI behavior after opening an original manga (history/recently viewed/read state, etc.) is
+outside this restriction and behaves exactly as it normally would.
+
+## Performance
+
+The first scan reads the source and manga directory names once and intersects them with existing Mihon manga
+rows. The resulting eligible manga list is held only in memory.
+
+**换一批** only shuffles the in-memory list. It does not rescan disk.
+
+**重新扫描下载目录** explicitly performs the read-only directory scan again.
 
 ## Build
-
-From this repository root:
 
 ```powershell
 .\gradlew.bat :src:all:randomdownloads:assembleDebug
 ```
 
-The extension module is:
+Current candidate:
 
 ```text
-src/all/randomdownloads
+src/all/randomdownloads/build/outputs/apk/debug/tachiyomi-all.randomdownloads-v1.6.3.apk
 ```
 
-## Current scope
+## Acceptance test
 
-This is intentionally a personal PoC. Entries in Random Downloads are separate Mihon manga identities from
-their original online-source entries, so reading progress is not shared with the original source entry.
-
-## Real-device validation checklist
-
-The code and APK compile successfully on Windows. The remaining validation requires a phone/tablet
-running Mihon with real downloaded manga.
-
-1. Install the debug APK from:
-   `src/all/randomdownloads/build/outputs/apk/debug/tachiyomi-all.randomdownloads-v1.6.1.apk`
-2. In Mihon, enable/trust the **Random Downloads** extension if prompted.
-3. Open **Browse -> Sources -> Random Downloads**.
-4. Confirm that roughly 20 manga from different original sources appear.
-5. Pull to refresh/re-enter the source and confirm the selection changes.
-6. Open a manga and confirm only locally downloaded chapters are listed.
-7. Open a downloaded CBZ chapter and flip through at least 20 pages.
-8. Go back, open a different chapter, then return to the first chapter to exercise the local cache.
-9. Search for part of a manga title and for an original source directory name.
-10. If anything fails, capture the exact screen/error plus `adb logcat` around the failure.
-
-The first device test should especially verify that the installed Mihon build uses the expected
-`__APP_STATE_storage_dir` preference key and that its persisted SAF permission is visible from the
-extension process. Those are host/runtime facts that cannot be fully proven by an APK-only build.
+1. Install/trust **Random Downloads 1.6.3**.
+2. In Mihon: **浏览 -> 插件 -> Random Downloads -> 设置**.
+3. Wait for the initial read-only scan.
+4. Confirm the status reports a plausible number of downloaded manga.
+5. Tap **换一批** and confirm it changes immediately without another long scan.
+6. Tap a manga entry and confirm Mihon opens its original manga page.
+7. Confirm downloaded chapter indicators, read progress, source identity, and library state are the original ones.
+8. Do not use the normal Random Downloads source Browse page; it is intentionally empty.

@@ -1,5 +1,10 @@
 package eu.kanade.tachiyomi.extension.all.randomdownloads
 
+import android.os.Handler
+import android.os.Looper
+import androidx.preference.Preference
+import androidx.preference.PreferenceScreen
+import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
@@ -9,40 +14,28 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.source.KeiSource
 import okhttp3.HttpUrl
-import okhttp3.OkHttpClient
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 @Source
-abstract class RandomDownloads : KeiSource() {
+abstract class RandomDownloads :
+    KeiSource(),
+    ConfigurableSource {
 
-    private val storage = MihonStorage()
-    private val chapterCache = ChapterCache(storage)
-
-    @Volatile
-    private var catalogCache: List<DownloadedManga> = emptyList()
-
-    @Volatile
-    private var catalogScannedAt: Long = 0L
-
-    private val catalogLock = Any()
+    private val downloadedIndex = ExistingDownloadedMangaIndex()
+    private val requestGeneration = AtomicInteger(0)
 
     override val supportsLatest: Boolean
         get() = false
 
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(LocalAssetInterceptor(chapterCache))
-
-    override suspend fun getPopularManga(page: Int): MangasPage {
-        if (page != 1) return MangasPage(emptyList(), hasNextPage = false)
-
-        val manga = catalog()
-            .shuffled()
-            .take(RANDOM_PAGE_SIZE)
-            .map(::toSManga)
-
-        return MangasPage(
-            mangas = manga,
-            hasNextPage = false,
-        )
-    }
+    /**
+     * Intentionally empty.
+     *
+     * Returning virtual manga from a normal source listing makes Mihon persist a second manga
+     * identity through NetworkToLocalManga. This extension deliberately avoids that path.
+     * Use the source's Settings screen instead.
+     */
+    override suspend fun getPopularManga(page: Int): MangasPage = MangasPage(emptyList(), hasNextPage = false)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = MangasPage(emptyList(), hasNextPage = false)
 
@@ -50,113 +43,139 @@ abstract class RandomDownloads : KeiSource() {
         page: Int,
         query: String,
         filters: FilterList,
-    ): MangasPage {
-        if (page != 1) return MangasPage(emptyList(), hasNextPage = false)
+    ): MangasPage = MangasPage(emptyList(), hasNextPage = false)
 
-        val normalized = query.trim()
-        val result = catalog()
-            .asSequence()
-            .filter { downloaded ->
-                normalized.isBlank() ||
-                    downloaded.ref.mangaName.contains(normalized, ignoreCase = true) ||
-                    downloaded.ref.sourceName.contains(normalized, ignoreCase = true)
-            }
-            .sortedWith { left, right ->
-                naturalCompare(left.ref.mangaName, right.ref.mangaName)
-            }
-            .map(::toSManga)
-            .toList()
-
-        return MangasPage(result, hasNextPage = false)
-    }
-
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val ref = parseMangaUrl(url.encodedPath) ?: return null
-        if (storage.resolveManga(ref) == null) return null
-
-        return toSManga(DownloadedManga(ref))
-    }
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? = null
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
         fetchDetails: Boolean,
         fetchChapters: Boolean,
-    ): SMangaUpdate {
-        val ref = parseMangaUrl(manga.url)
-            ?: return SMangaUpdate(manga = manga, chapters = chapters)
+    ): SMangaUpdate = SMangaUpdate(manga, chapters)
 
-        if (fetchDetails) {
-            manga.title = ref.mangaName
-            manga.thumbnail_url = ref.coverUrl
-            manga.description =
-                "Local downloaded manga.\n\n" +
-                "Original Mihon download source: ${ref.sourceName}"
+    override suspend fun getPageList(chapter: SChapter): List<Page> = emptyList()
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        val notice = Preference().apply {
+            title = "随机已下载漫画（原条目）"
+            summary =
+                "只读扫描 Mihon 现有下载目录，并打开数据库中原有的 Manga ID。" +
+                "不会创建虚拟漫画、索引文件、缓存文件，也不会修改下载内容。"
+            setEnabled(false)
         }
 
-        val updatedChapters = if (fetchChapters) {
-            storage.listChapters(ref).map(::toSChapter)
-        } else {
-            chapters
+        val shuffle = Preference().apply {
+            title = "🎲 换一批"
+            summary = "使用内存中的已识别列表重新随机 20 本"
         }
 
-        return SMangaUpdate(
-            manga = manga,
-            chapters = updatedChapters,
-        )
-    }
-
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val ref = parseChapterUrl(chapter.url)
-            ?: error("Invalid local chapter URL: ${chapter.url}")
-
-        val files = chapterCache.prepareChapter(ref)
-
-        return files.mapIndexed { index, file ->
-            Page(
-                index = index,
-                imageUrl = ref.pageUrl(file.name),
-            )
-        }
-    }
-
-    private fun catalog(): List<DownloadedManga> {
-        val now = System.currentTimeMillis()
-        val existing = catalogCache
-
-        if (existing.isNotEmpty() && now - catalogScannedAt < CATALOG_TTL_MS) {
-            return existing
+        val rescan = Preference().apply {
+            title = "↻ 重新扫描下载目录"
+            summary = "只读重新扫描；下载内容发生变化后使用"
         }
 
-        return synchronized(catalogLock) {
-            val current = catalogCache
-            val currentNow = System.currentTimeMillis()
+        val status = Preference().apply {
+            title = "随机结果"
+            summary = "尚未加载"
+            setEnabled(false)
+        }
 
-            if (current.isNotEmpty() && currentNow - catalogScannedAt < CATALOG_TTL_MS) {
-                current
+        val resultPreferences = List(RANDOM_PAGE_SIZE) {
+            Preference().apply {
+                setVisible(false)
+            }
+        }
+
+        screen.addPreference(notice)
+        screen.addPreference(shuffle)
+        screen.addPreference(rescan)
+        screen.addPreference(status)
+        resultPreferences.forEach(screen::addPreference)
+
+        fun render(rescanDirectories: Boolean) {
+            val generation = requestGeneration.incrementAndGet()
+
+            shuffle.setEnabled(false)
+            rescan.setEnabled(false)
+            status.title = if (rescanDirectories) {
+                "正在只读扫描下载目录…"
             } else {
-                storage.scanDownloadedManga().also {
-                    catalogCache = it
-                    catalogScannedAt = currentNow
+                "正在随机…"
+            }
+            status.summary = null
+            resultPreferences.forEach { it.setVisible(false) }
+
+            executor.execute {
+                val loaded = runCatching {
+                    downloadedIndex.random(
+                        limit = RANDOM_PAGE_SIZE,
+                        rescan = rescanDirectories,
+                    )
+                }
+
+                mainHandler.post {
+                    if (generation != requestGeneration.get()) {
+                        return@post
+                    }
+
+                    shuffle.setEnabled(true)
+                    rescan.setEnabled(true)
+
+                    loaded.onSuccess { selection ->
+                        status.title = "随机结果"
+                        status.summary = "共识别 ${selection.total} 本有下载漫画"
+
+                        resultPreferences.forEachIndexed { index, preference ->
+                            val manga = selection.items.getOrNull(index)
+                            if (manga == null) {
+                                preference.setVisible(false)
+                                return@forEachIndexed
+                            }
+
+                            preference.title = manga.title
+                            preference.summary = manga.sourceName
+                            preference.setOnPreferenceClickListener {
+                                downloadedIndex.open(manga.id)
+                                true
+                            }
+                            preference.setVisible(true)
+                        }
+
+                        if (selection.items.isEmpty()) {
+                            status.title = "没有匹配到已下载的原漫画条目"
+                            status.summary = "可以点“重新扫描下载目录”再试一次"
+                        }
+                    }.onFailure { error ->
+                        status.title = "读取失败"
+                        status.summary = error.message ?: error.javaClass.simpleName
+                    }
                 }
             }
         }
-    }
 
-    private fun toSManga(downloaded: DownloadedManga): SManga = SManga.create().apply {
-        url = downloaded.ref.mangaUrl
-        title = downloaded.ref.mangaName
-        thumbnail_url = downloaded.ref.coverUrl
-    }
+        shuffle.setOnPreferenceClickListener {
+            render(rescanDirectories = false)
+            true
+        }
 
-    private fun toSChapter(downloaded: DownloadedChapter): SChapter = SChapter.create().apply {
-        url = downloaded.ref.chapterUrl
-        name = downloaded.displayName
-        date_upload = downloaded.lastModified
+        rescan.setOnPreferenceClickListener {
+            render(rescanDirectories = true)
+            true
+        }
+
+        render(rescanDirectories = true)
     }
 
     companion object {
         private const val RANDOM_PAGE_SIZE = 20
-        private const val CATALOG_TTL_MS = 30_000L
+
+        private val executor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "RandomDownloads-ReadOnly").apply {
+                isDaemon = true
+            }
+        }
+
+        private val mainHandler = Handler(Looper.getMainLooper())
     }
 }

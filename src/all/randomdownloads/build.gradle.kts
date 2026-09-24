@@ -6,13 +6,13 @@ plugins {
 
 keiyoushi {
     name = "Random Downloads"
-    versionCode = 1
+    versionCode = 3
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 
     source {
         baseUrl = "https://random-downloads.invalid"
-        lang = "all"
+        lang = "zh"
     }
 
     deeplink {
