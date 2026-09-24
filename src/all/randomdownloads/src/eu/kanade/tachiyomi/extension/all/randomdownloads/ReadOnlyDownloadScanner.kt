@@ -5,7 +5,14 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import keiyoushi.utils.applicationContext
-import java.io.Closeable
+import keiyoushi.zip.Entry
+import keiyoushi.zip.fixedLength
+import keiyoushi.zip.readZipDirectory
+import keiyoushi.zip.readZipEntry
+import okio.BufferedSource
+import okio.Source
+import okio.buffer
+import okio.source
 import java.io.InputStream
 
 internal class ReadOnlyDownloadScanner(
@@ -87,28 +94,37 @@ internal class ReadOnlyDownloadScanner(
         .filter { !it.isDirectory && isImageName(it.name) }
         .sortedWith { left, right -> naturalCompare(left.name, right.name) }
 
-    fun listArchiveImageEntries(archiveUri: Uri): List<String> {
-        val entries = withArchiveReader(archiveUri) { reader ->
-            val useEntries = reader.javaClass.methods.first {
-                it.name == "useEntries" && it.parameterCount == 1
+    fun listArchiveImageEntries(archiveUri: Uri): List<ArchiveImageEntry> {
+        val directory = readZipDirectory(
+            totalSize = archiveSize(archiveUri),
+            fetch = { range -> rangeSource(archiveUri, range) },
+        )
+
+        return directory.entries
+            .asSequence()
+            .filter { isImageName(it.name) }
+            .sortedWith { left, right -> naturalCompare(left.name, right.name) }
+            .map { entry ->
+                ArchiveImageEntry(
+                    archiveUri = archiveUri,
+                    name = entry.name,
+                    method = entry.method,
+                    compressedSize = entry.compressedSize,
+                    localHeaderOffset = entry.localHeaderOffset,
+                )
             }
-
-            @Suppress("UNCHECKED_CAST")
-            useEntries.invoke(
-                reader,
-                { sequence: Sequence<Any> ->
-                    sequence
-                        .mapNotNull(::archiveEntryName)
-                        .filter(::isImageName)
-                        .toList()
-                },
-            ) as List<String>
-        }
-
-        return entries.sortedWith(Comparator(::naturalCompare))
+            .toList()
     }
 
-    fun firstArchiveImageEntry(archiveUri: Uri): String? = listArchiveImageEntries(archiveUri).firstOrNull()
+    fun openArchiveEntry(entry: ArchiveImageEntry): Source = readZipEntry(
+        entry = Entry(
+            name = entry.name,
+            method = entry.method,
+            compressedSize = entry.compressedSize,
+            localHeaderOffset = entry.localHeaderOffset,
+        ),
+        fetch = { range -> rangeSource(entry.archiveUri, range) },
+    )
 
     fun openInputStream(uri: Uri): InputStream = resolver.openInputStream(uri)
         ?: error("Unable to open document: $uri")
@@ -116,34 +132,28 @@ internal class ReadOnlyDownloadScanner(
     fun openFileDescriptor(uri: Uri): ParcelFileDescriptor = resolver.openFileDescriptor(uri, "r")
         ?: error("Unable to open file descriptor: $uri")
 
-    private fun <T> withArchiveReader(
-        uri: Uri,
-        block: (Any) -> T,
-    ): T {
-        val pfd = openFileDescriptor(uri)
-        var reader: Any? = null
-
-        try {
-            val readerClass = Class.forName(
-                ARCHIVE_READER_CLASS,
-                true,
-                applicationContext.classLoader,
-            )
-
-            reader = readerClass
-                .getConstructor(ParcelFileDescriptor::class.java)
-                .newInstance(pfd)
-
-            return block(reader)
-        } finally {
-            runCatching { (reader as? Closeable)?.close() }
-            runCatching { pfd.close() }
-        }
+    private fun archiveSize(uri: Uri): Long = openFileDescriptor(uri).use { descriptor ->
+        descriptor.statSize.takeIf { it >= 0L }
+            ?: error("Unable to determine archive size: $uri")
     }
 
-    private fun archiveEntryName(entry: Any): String? = runCatching {
-        entry.javaClass.getMethod("getName").invoke(entry) as? String
-    }.getOrNull()
+    private fun rangeSource(
+        uri: Uri,
+        range: LongRange,
+    ): BufferedSource {
+        require(!range.isEmpty()) { "Empty archive range" }
+
+        val input = ParcelFileDescriptor.AutoCloseInputStream(
+            openFileDescriptor(uri),
+        )
+        input.channel.position(range.first)
+
+        val byteCount = range.last - range.first + 1L
+        return input
+            .source()
+            .fixedLength(byteCount)
+            .buffer()
+    }
 
     private fun storageTreeUri(): Uri {
         val prefs = context.getSharedPreferences(
@@ -168,7 +178,6 @@ internal class ReadOnlyDownloadScanner(
     }
 
     companion object {
-        private const val ARCHIVE_READER_CLASS = "mihon.core.archive.ArchiveReader"
         private const val STORAGE_KEY = "__APP_STATE_storage_dir"
         private const val LEGACY_STORAGE_KEY = "storage_dir"
         private const val DOWNLOADS_DIR = "downloads"

@@ -1,12 +1,10 @@
 package eu.kanade.tachiyomi.extension.all.randomdownloads
 
 import android.net.Uri
-import android.util.Log
 import java.util.concurrent.ConcurrentHashMap
 
 internal class LocalDownloadRepository(
     private val scanner: ReadOnlyDownloadScanner = ReadOnlyDownloadScanner(),
-    private val hostCacheSampler: HostDownloadCacheSampler = HostDownloadCacheSampler(),
 ) {
 
     private val knownManga = ConcurrentHashMap<String, DownloadedManga>()
@@ -19,22 +17,6 @@ internal class LocalDownloadRepository(
         if (limit <= 0) return emptyList()
 
         val result = linkedMapOf<String, DownloadedManga>()
-
-        val hostSample = hostCacheSampler.sample(limit).orEmpty()
-        hostSample.forEach { manga ->
-            remember(manga)
-            result[manga.ref.mangaUrl] = manga
-        }
-
-        if (result.size >= limit) {
-            Log.i(TAG, "Random sample served entirely from Mihon DownloadCache")
-            return result.values.take(limit)
-        }
-
-        Log.i(
-            TAG,
-            "Mihon DownloadCache supplied ${result.size}/$limit; falling back to partial directory sampling",
-        )
 
         sourceDirectories()
             .shuffled()
@@ -135,7 +117,7 @@ internal class LocalDownloadRepository(
 
     fun listFolderImages(uri: Uri): List<DocumentNode> = scanner.listImages(uri)
 
-    fun listArchiveImages(uri: Uri): List<String> = scanner.listArchiveImageEntries(uri)
+    fun listArchiveImages(uri: Uri): List<ArchiveImageEntry> = scanner.listArchiveImageEntries(uri)
 
     fun coverTarget(ref: MangaRef): LocalImageTarget? {
         val manga = resolveManga(ref) ?: return null
@@ -169,7 +151,7 @@ internal class LocalDownloadRepository(
             LocalImageTarget.File(first.uri, first.name)
         } else {
             val first = scanner.listArchiveImageEntries(chapter.uri).firstOrNull() ?: return null
-            LocalImageTarget.ArchiveEntry(chapter.uri, first)
+            LocalImageTarget.ArchiveEntry(first)
         }
     }
 
@@ -206,7 +188,6 @@ internal class LocalDownloadRepository(
     )
 
     companion object {
-        private const val TAG = "RandomDownloads"
         private const val PER_SOURCE_SAMPLE = 5
 
         private val COVER_NAMES = setOf(

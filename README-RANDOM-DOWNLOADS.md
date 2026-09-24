@@ -1,40 +1,50 @@
-﻿# Mihon Random Downloads
+# Mihon Random Downloads
 
 Personal Mihon source extension that shows a random screen of already-downloaded manga.
 
-## Chosen UX
-
-This project intentionally uses Mihon's normal source browsing flow:
+## UX
 
 ```text
-Browse -> Random Downloads -> random manga screen -> manga -> local chapters -> Reader
+浏览 -> 图源 -> Random Downloads
+     -> 随机 20 本
+     -> 漫画
+     -> 本地章节
+     -> Reader
 ```
 
-Random Downloads entries are separate Mihon identities from the original online-source entries. Therefore
-download badges, reading progress, and source identity may differ from the original entry. This tradeoff is
-intentional in favor of direct source browsing.
+Random Downloads entries intentionally use their own Mihon source identity. Download badges, reading progress,
+and original-source identity may therefore differ from the original entries. This is the chosen tradeoff for
+direct source browsing.
+
+## No reflection
+
+The extension does not use reflection.
+
+Runtime source code contains no:
+
+- `Class.forName`
+- `javaClass`
+- `getMethod` / `getDeclaredField`
+- `Injekt.getInstance`
+- reflective `invoke`
+
+The extension does not access Mihon internal `DownloadCache` or `ArchiveReader`.
 
 ## Random performance
 
-The extension no longer scans all downloaded manga before choosing 20.
+The extension does not scan all ~3000 manga directories before choosing 20.
 
-Preferred path:
+It:
 
-1. Read Mihon's existing in-memory `DownloadCache.rootDownloadsDir` by reflection.
-2. Reservoir-sample 20 manga directly from that already-built cache.
-3. Do not touch the filesystem for the random selection itself.
+1. reads and caches the small list of download-source directories in process memory;
+2. shuffles those source directories;
+3. reads manga directories from only enough selected sources to fill the screen;
+4. samples at most 5 manga per selected source;
+5. stops immediately when 20 manga have been collected.
 
-Fallback path, used only when Mihon's download cache is not ready:
+This favors source diversity instead of mathematically perfect per-manga uniformity, but avoids a full download-tree scan.
 
-1. Read the small list of source directories.
-2. Shuffle the sources.
-3. Read manga directories from only enough randomly chosen sources to collect 20 entries.
-4. Stop immediately after 20 are collected.
-
-The fallback currently samples up to 5 manga per selected source. It favors source diversity over perfectly
-uniform per-manga probability, but avoids scanning all ~3000 manga directories.
-
-No plugin index is written to disk. Known paths are cached in process memory only.
+No random index is written to disk.
 
 ## File-safety boundary
 
@@ -42,22 +52,43 @@ The extension itself does not create, rename, delete, extract, or modify manga/d
 
 Runtime implementation:
 
-- does **not** open `tachiyomi.db` directly;
-- does **not** write any plugin index/cache/record file;
-- uses `DocumentsContract` and persisted SAF access read-only;
-- reads normal chapter folders through `ContentResolver.openInputStream()`;
-- enumerates CBZ entries with `ZipInputStream` read-only;
-- streams selected CBZ entries through Mihon's existing `ArchiveReader` using a read-only file descriptor;
-- does not extract CBZ files to disk.
+- does not open `tachiyomi.db`;
+- does not write plugin index/cache/record files;
+- uses `DocumentsContract` / `ContentResolver` read-only;
+- opens files with read-only `ParcelFileDescriptor`;
+- reads folder chapters directly from existing image files;
+- reads CBZ central directories and entries with the extension framework's public `keiyoushi.zip` API;
+- performs range reads through a read-only file descriptor;
+- never extracts CBZ files to disk.
 
-Mihon's own normal source browsing/database/image-cache behavior remains unchanged.
+Mihon's own normal source/database/image-cache behavior is unchanged.
 
 ## Covers
 
-The manga list uses the first readable local page as a cover through the same read-only image bridge.
+The extension first uses an existing manga-level cover file:
 
-Cover loading happens asynchronously after the manga list is returned. For CBZ covers, only the first image
-entry is located; the entire archive is not extracted or copied.
+```text
+cover.jpg
+cover.jpeg
+cover.png
+cover.webp
+cover.avif
+```
+
+On this device, 2910 of 2924 downloaded manga directories already have such a cover.
+
+Only when no cover file exists does the extension fall back to the first page of a downloaded chapter.
+
+## Refresh / reroll
+
+Mihon 0.20.4 does not show a generic refresh button on a source page that already has results.
+
+Random Downloads therefore exposes both:
+
+- **热门**
+- **最近更新**
+
+Both return a fresh random batch. Switching between the two chips rebuilds the pager and rerolls the 20 manga.
 
 ## Build
 
@@ -68,23 +99,16 @@ entry is located; the entire archive is not extracted or copied.
 Current candidate:
 
 ```text
-src/all/randomdownloads/build/outputs/apk/debug/tachiyomi-all.randomdownloads-v1.6.8.apk
+src/all/randomdownloads/build/outputs/apk/debug/tachiyomi-all.randomdownloads-v1.6.9.apk
 ```
 
 ## Acceptance test
 
-1. Install/trust **Random Downloads 1.6.8**.
-2. Open **娴忚 -> 鍥炬簮 -> Random Downloads**.
-3. Measure first random-page load.
-4. Refresh/re-enter and verify the next random page is fast.
-5. Open several manga and verify the details page no longer crashes.
-6. Verify only locally present chapters are listed.
-7. Open a CBZ chapter and flip through multiple pages.
-8. Confirm no download file is created, renamed, deleted, or modified by the extension.
-
-## Refresh behavior
-
-Mihon 0.20.4 does not expose a generic refresh button when a source has results. Random Downloads therefore exposes both **热门** and **最近更新**; both produce a fresh random batch. Switching between the two chips rebuilds the pager and rerolls the 20 manga.
-
-CBZ page enumeration uses Mihon's own ArchiveReader rather than Java ZipInputStream for SAF/archive compatibility.
-
+1. Install/trust **Random Downloads 1.6.9**.
+2. Open **浏览 -> 图源 -> Random Downloads**.
+3. Confirm 20 manga appear without a full-tree scan.
+4. Switch **热门 / 最近更新** and confirm a new batch appears.
+5. Open several manga and verify chapters open normally.
+6. Open a known CBZ chapter and confirm its full page count is returned.
+7. Flip through multiple CBZ pages.
+8. Confirm no download file is created, renamed, deleted, extracted, or modified by the extension.

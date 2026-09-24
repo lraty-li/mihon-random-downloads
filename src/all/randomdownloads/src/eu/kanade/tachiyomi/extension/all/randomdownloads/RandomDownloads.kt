@@ -103,10 +103,10 @@ abstract class RandomDownloads : KeiSource() {
         } else {
             repository
                 .listArchiveImages(local.uri)
-                .mapIndexed { index, entryName ->
+                .mapIndexed { index, entry ->
                     Page(
                         index = index,
-                        imageUrl = archivePageUrl(local.uri, entryName),
+                        imageUrl = archivePageUrl(entry),
                     )
                 }
         }

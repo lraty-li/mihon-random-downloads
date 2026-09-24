@@ -44,6 +44,14 @@ internal data class DocumentNode(
     val isDirectory: Boolean,
 )
 
+internal data class ArchiveImageEntry(
+    val archiveUri: Uri,
+    val name: String,
+    val method: Int,
+    val compressedSize: Long,
+    val localHeaderOffset: Long,
+)
+
 internal sealed interface LocalImageTarget {
     data class File(
         val uri: Uri,
@@ -51,8 +59,7 @@ internal sealed interface LocalImageTarget {
     ) : LocalImageTarget
 
     data class ArchiveEntry(
-        val archiveUri: Uri,
-        val entryName: String,
+        val entry: ArchiveImageEntry,
     ) : LocalImageTarget
 }
 
@@ -85,7 +92,33 @@ internal fun parseChapterUrl(url: String): ChapterRef? {
 
 internal fun filePageUrl(uri: Uri, name: String): String = "$LOCAL_ASSET_BASE/file/${encodePart(uri.toString())}/${encodePart(name)}"
 
-internal fun archivePageUrl(uri: Uri, entryName: String): String = "$LOCAL_ASSET_BASE/archive/${encodePart(uri.toString())}/${encodePart(entryName)}"
+internal fun archivePageUrl(entry: ArchiveImageEntry): String = buildString {
+    append(LOCAL_ASSET_BASE)
+    append("/archive/")
+    append(encodePart(entry.archiveUri.toString()))
+    append('/')
+    append(entry.localHeaderOffset)
+    append('/')
+    append(entry.compressedSize)
+    append('/')
+    append(entry.method)
+    append('/')
+    append(encodePart(entry.name))
+}
+
+internal fun parseArchivePageSegments(segments: List<String>): ArchiveImageEntry? {
+    if (segments.size != 6 || segments[0] != "archive") return null
+
+    return runCatching {
+        ArchiveImageEntry(
+            archiveUri = Uri.parse(decodePart(segments[1])),
+            localHeaderOffset = segments[2].toLong(),
+            compressedSize = segments[3].toLong(),
+            method = segments[4].toInt(),
+            name = decodePart(segments[5]),
+        )
+    }.getOrNull()
+}
 
 internal fun encodePart(value: String): String = Base64.encodeToString(
     value.toByteArray(StandardCharsets.UTF_8),
