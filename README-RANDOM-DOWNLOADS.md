@@ -1,49 +1,59 @@
 # Mihon Random Downloads
 
-Personal Mihon extension for opening a random selection of manga that already have local downloads.
+Personal Mihon source extension that shows a random screen of manga that already exist under Mihon's download directory.
 
-## Current design
+## Chosen behavior
 
-The old virtual-source PoC was removed because Mihon's normal source browsing pipeline persists returned
-network manga as a separate source identity. That caused incorrect downloaded/read state.
+This project intentionally uses Mihon's normal source browsing flow.
 
-Version 1.6.3 uses the extension's **Settings** screen instead:
+That means Random Downloads entries are separate Mihon source identities from the original online-source entries. As a result:
 
-1. Open Mihon's existing `tachiyomi.db` with SQLite `OPEN_READONLY`.
-2. Read existing manga IDs, source IDs, and titles.
-3. Read only the two directory levels under Mihon's existing `downloads/<source>/<manga>` tree.
-4. Use Mihon's existing `DownloadProvider` naming functions to match download folders back to original manga rows.
-5. Keep the matched list only in process memory.
-6. Randomly show 20 original manga entries in the extension Settings screen.
-7. Clicking an item launches Mihon's existing `SHOW_MANGA` action with the original manga ID.
+- downloaded badges/state may not match the original entry;
+- read progress/history may differ from the original entry;
+- source identity is Random Downloads rather than the original source.
 
-The normal source Browse/Search APIs intentionally return an empty list so they cannot create virtual or
-duplicate manga entries.
+This tradeoff is intentional because the desired interaction is:
 
-## Write-safety rules
+```text
+Browse -> Random Downloads -> random manga screen -> manga -> locally downloaded chapters -> Reader
+```
 
-Runtime plugin code must not:
+## File-safety boundary
 
-- create an index/cache/record file;
-- create, rename, delete, extract, or modify manga/download files;
-- write to Mihon's manga/chapter/download tables;
-- generate fake local chapters/pages;
-- use the previous CBZ extraction/image-interceptor path.
+The extension itself does not create, rename, delete, extract, or modify manga/download files.
 
-The directory scan uses `DocumentsContract` queries only. The database connection is opened with
-`SQLiteDatabase.OPEN_READONLY`.
+Runtime implementation:
 
-Mihon's own normal UI behavior after opening an original manga (history/recently viewed/read state, etc.) is
-outside this restriction and behaves exactly as it normally would.
+- opens Mihon's `tachiyomi.db` with `SQLiteDatabase.OPEN_READONLY`;
+- reads only directory names/URIs through `DocumentsContract`;
+- keeps the download/manga index only in process memory;
+- reads folder pages through `ContentResolver.openInputStream()`;
+- reads CBZ entries through Mihon's existing `ArchiveReader` via a read-only file descriptor;
+- does not create plugin cache/index/record files;
+- does not extract CBZ files to disk.
 
-## Performance
+Mihon's own normal source browsing/database/cache behavior is unchanged.
 
-The first scan reads the source and manga directory names once and intersects them with existing Mihon manga
-rows. The resulting eligible manga list is held only in memory.
+## Performance model
 
-**换一批** only shuffles the in-memory list. It does not rescan disk.
+On the first Random Downloads browse in a process:
 
-**重新扫描下载目录** explicitly performs the read-only directory scan again.
+1. scan `downloads/<source>/<manga>` directory names once;
+2. read existing manga metadata from Mihon's DB;
+3. intersect both lists in memory;
+4. randomly return 20 manga.
+
+Subsequent refreshes only shuffle the in-memory list.
+
+Covers use the original manga `thumbnail_url`, allowing Mihon's existing image cache/network path to handle them instead of opening a CBZ per cover.
+
+When a manga is opened, only that manga's directory is read to find downloaded chapters.
+
+## Reader
+
+Downloaded folder chapters are streamed directly from their existing image files.
+
+Downloaded CBZ chapters are not extracted. The extension enumerates image entry names and then streams the selected entry through Mihon's existing archive reader.
 
 ## Build
 
@@ -54,16 +64,16 @@ rows. The resulting eligible manga list is held only in memory.
 Current candidate:
 
 ```text
-src/all/randomdownloads/build/outputs/apk/debug/tachiyomi-all.randomdownloads-v1.6.3.apk
+src/all/randomdownloads/build/outputs/apk/debug/tachiyomi-all.randomdownloads-v1.6.5.apk
 ```
 
 ## Acceptance test
 
-1. Install/trust **Random Downloads 1.6.3**.
-2. In Mihon: **浏览 -> 插件 -> Random Downloads -> 设置**.
-3. Wait for the initial read-only scan.
-4. Confirm the status reports a plausible number of downloaded manga.
-5. Tap **换一批** and confirm it changes immediately without another long scan.
-6. Tap a manga entry and confirm Mihon opens its original manga page.
-7. Confirm downloaded chapter indicators, read progress, source identity, and library state are the original ones.
-8. Do not use the normal Random Downloads source Browse page; it is intentionally empty.
+1. Install/trust **Random Downloads 1.6.5**.
+2. Open **浏览 -> 图源 -> Random Downloads**.
+3. Confirm the first screen eventually shows ~20 random downloaded manga.
+4. Re-enter/refresh and confirm the next random batch is much faster.
+5. Open a manga and confirm only locally present chapters are shown.
+6. Open a folder-based chapter if available.
+7. Open a CBZ chapter and flip through multiple pages.
+8. Confirm no download file is modified or created by the extension.

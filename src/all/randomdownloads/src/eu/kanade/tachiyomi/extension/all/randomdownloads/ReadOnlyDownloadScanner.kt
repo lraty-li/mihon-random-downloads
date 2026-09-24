@@ -2,8 +2,12 @@ package eu.kanade.tachiyomi.extension.all.randomdownloads
 
 import android.content.Context
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import keiyoushi.utils.applicationContext
+import java.io.BufferedInputStream
+import java.io.InputStream
+import java.util.zip.ZipInputStream
 
 internal class ReadOnlyDownloadScanner(
     private val context: Context = applicationContext,
@@ -19,21 +23,66 @@ internal class ReadOnlyDownloadScanner(
             DocumentsContract.getTreeDocumentId(treeUri),
         )
 
-        val downloads = findDirectory(
-            treeUri = treeUri,
-            parentUri = rootDocumentUri,
-            name = DOWNLOADS_DIR,
-        ) ?: error("Mihon downloads directory was not found.")
+        val downloads = listChildren(rootDocumentUri)
+            .firstOrNull { it.isDirectory && it.name == DOWNLOADS_DIR }
+            ?: error("Mihon downloads directory was not found.")
 
-        val mangaDirsBySource = listDirectories(treeUri, downloads.uri)
+        val mangaDirsBySource = listChildren(downloads.uri)
+            .asSequence()
+            .filter { it.isDirectory }
             .associate { sourceDir ->
                 sourceDir.name.lowercase() to
-                    listDirectories(treeUri, sourceDir.uri)
-                        .mapTo(linkedSetOf()) { it.name }
+                    listChildren(sourceDir.uri)
+                        .asSequence()
+                        .filter { it.isDirectory }
+                        .associate { mangaDir ->
+                            mangaDir.name to mangaDir.uri
+                        }
             }
 
         return DownloadDirectoryIndex(mangaDirsBySource)
     }
+
+    fun findChapterDocument(
+        mangaDirectoryUri: Uri,
+        validNames: List<String>,
+    ): DocumentNode? {
+        val byName = listChildren(mangaDirectoryUri)
+            .associateBy { it.name }
+
+        return validNames.firstNotNullOfOrNull(byName::get)
+    }
+
+    fun listImages(directoryUri: Uri): List<DocumentNode> = listChildren(directoryUri)
+        .filter { !it.isDirectory && isImageName(it.name) }
+        .sortedWith { left, right -> naturalCompare(left.name, right.name) }
+
+    fun listArchiveImageEntries(archiveUri: Uri): List<String> {
+        val entries = mutableListOf<String>()
+
+        openInputStream(archiveUri).use { raw ->
+            ZipInputStream(BufferedInputStream(raw)).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    try {
+                        if (!entry.isDirectory && isImageName(entry.name)) {
+                            entries += entry.name
+                        }
+                    } finally {
+                        zip.closeEntry()
+                    }
+                }
+            }
+        }
+
+        return entries.sortedWith(Comparator(::naturalCompare))
+    }
+
+    fun openInputStream(uri: Uri): InputStream = resolver.openInputStream(uri)
+        ?: error("Unable to open document: $uri")
+
+    fun openFileDescriptor(uri: Uri): ParcelFileDescriptor = resolver.openFileDescriptor(uri, "r")
+        ?: error("Unable to open file descriptor: $uri")
 
     private fun storageTreeUri(): Uri {
         val prefs = context.getSharedPreferences(
@@ -58,19 +107,10 @@ internal class ReadOnlyDownloadScanner(
         return Uri.parse(raw)
     }
 
-    private fun findDirectory(
-        treeUri: Uri,
-        parentUri: Uri,
-        name: String,
-    ): DocumentDirectory? = listDirectories(treeUri, parentUri)
-        .firstOrNull { it.name == name }
-
-    private fun listDirectories(
-        treeUri: Uri,
-        parentUri: Uri,
-    ): List<DocumentDirectory> {
+    fun listChildren(parentUri: Uri): List<DocumentNode> {
+        val treeUri = storageTreeUri()
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-            treeUri,
+            parentUri,
             DocumentsContract.getDocumentId(parentUri),
         )
 
@@ -99,32 +139,23 @@ internal class ReadOnlyDownloadScanner(
                 )
 
                 while (cursor.moveToNext()) {
-                    if (
-                        cursor.getString(mimeIndex) !=
-                        DocumentsContract.Document.MIME_TYPE_DIR
-                    ) {
-                        continue
-                    }
-
                     val documentId = cursor.getString(idIndex)
+                    val mimeType = cursor.getString(mimeIndex).orEmpty()
+
                     add(
-                        DocumentDirectory(
+                        DocumentNode(
                             uri = DocumentsContract.buildDocumentUriUsingTree(
                                 treeUri,
                                 documentId,
                             ),
                             name = cursor.getString(nameIndex).orEmpty(),
+                            isDirectory = mimeType == DocumentsContract.Document.MIME_TYPE_DIR,
                         ),
                     )
                 }
             }
         }
     }
-
-    private data class DocumentDirectory(
-        val uri: Uri,
-        val name: String,
-    )
 
     companion object {
         private const val STORAGE_KEY = "__APP_STATE_storage_dir"

@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.extension.all.randomdownloads
 
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import keiyoushi.utils.applicationContext
 import uy.kohesive.injekt.Injekt
@@ -35,37 +36,71 @@ internal class ReadOnlyMihonBridge {
         }
     }
 
-    fun readAllManga(): List<DatabaseManga> {
-        val databaseFile = applicationContext.getDatabasePath(DATABASE_NAME)
-        check(databaseFile.isFile) { "Mihon database not found: $databaseFile" }
+    private val getValidChapterDirNamesMethod by lazy {
+        downloadProvider.javaClass.methods.first {
+            it.name == "getValidChapterDirNames" && it.parameterCount == 3
+        }
+    }
 
-        val database = SQLiteDatabase.openDatabase(
-            databaseFile.absolutePath,
-            null,
-            SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
-        )
-
-        return database.use { db ->
-            db.rawQuery(
-                "SELECT _id, source, title FROM mangas",
-                emptyArray(),
-            ).use { cursor ->
-                buildList {
-                    val idIndex = cursor.getColumnIndexOrThrow("_id")
-                    val sourceIndex = cursor.getColumnIndexOrThrow("source")
-                    val titleIndex = cursor.getColumnIndexOrThrow("title")
-
-                    while (cursor.moveToNext()) {
-                        add(
-                            DatabaseManga(
-                                id = cursor.getLong(idIndex),
-                                sourceId = cursor.getLong(sourceIndex),
-                                title = cursor.getString(titleIndex),
-                            ),
-                        )
-                    }
+    fun readAllManga(): List<DatabaseManga> = withReadOnlyDatabase { db ->
+        db.rawQuery(
+            """
+                SELECT _id, source, title, thumbnail_url, author, artist, description, status
+                FROM mangas
+            """.trimIndent(),
+            emptyArray(),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(cursor.toDatabaseManga())
                 }
             }
+        }
+    }
+
+    fun readManga(id: Long): DatabaseManga? = withReadOnlyDatabase { db ->
+        db.rawQuery(
+            """
+                SELECT _id, source, title, thumbnail_url, author, artist, description, status
+                FROM mangas
+                WHERE _id = ?
+                LIMIT 1
+            """.trimIndent(),
+            arrayOf(id.toString()),
+        ).use { cursor ->
+            cursor.takeIf { it.moveToFirst() }?.toDatabaseManga()
+        }
+    }
+
+    fun readChapters(mangaId: Long): List<DatabaseChapter> = withReadOnlyDatabase { db ->
+        db.rawQuery(
+            """
+                SELECT _id, manga_id, url, name, scanlator, chapter_number, date_upload, source_order
+                FROM chapters
+                WHERE manga_id = ?
+                ORDER BY source_order ASC
+            """.trimIndent(),
+            arrayOf(mangaId.toString()),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(cursor.toDatabaseChapter())
+                }
+            }
+        }
+    }
+
+    fun readChapter(chapterId: Long): DatabaseChapter? = withReadOnlyDatabase { db ->
+        db.rawQuery(
+            """
+                SELECT _id, manga_id, url, name, scanlator, chapter_number, date_upload, source_order
+                FROM chapters
+                WHERE _id = ?
+                LIMIT 1
+            """.trimIndent(),
+            arrayOf(chapterId.toString()),
+        ).use { cursor ->
+            cursor.takeIf { it.moveToFirst() }?.toDatabaseChapter()
         }
     }
 
@@ -76,24 +111,74 @@ internal class ReadOnlyMihonBridge {
 
     fun mangaDirectoryName(title: String): String = getMangaDirNameMethod.invoke(downloadProvider, title) as String
 
+    @Suppress("UNCHECKED_CAST")
+    fun validChapterDocumentNames(chapter: DatabaseChapter): List<String> = getValidChapterDirNamesMethod.invoke(
+        downloadProvider,
+        chapter.name,
+        chapter.scanlator,
+        chapter.url,
+    ) as List<String>
+
     fun sourceDisplayName(source: Any): String = source.toString()
 
-    fun openOriginalManga(mangaId: Long) {
-        val activityClass = Class.forName(
-            MAIN_ACTIVITY_CLASS,
-            true,
-            classLoader,
+    private fun <T> withReadOnlyDatabase(block: (SQLiteDatabase) -> T): T {
+        val databaseFile = applicationContext.getDatabasePath(DATABASE_NAME)
+        check(databaseFile.isFile) { "Mihon database not found: $databaseFile" }
+
+        val database = SQLiteDatabase.openDatabase(
+            databaseFile.absolutePath,
+            null,
+            SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
         )
 
-        val intent = android.content.Intent(applicationContext, activityClass).apply {
-            action = SHOW_MANGA_ACTION
-            putExtra(MANGA_EXTRA, mangaId)
-            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        }
-
-        applicationContext.startActivity(intent)
+        return database.use(block)
     }
+
+    private fun Cursor.toDatabaseManga(): DatabaseManga {
+        val idIndex = getColumnIndexOrThrow("_id")
+        val sourceIndex = getColumnIndexOrThrow("source")
+        val titleIndex = getColumnIndexOrThrow("title")
+        val thumbnailIndex = getColumnIndexOrThrow("thumbnail_url")
+        val authorIndex = getColumnIndexOrThrow("author")
+        val artistIndex = getColumnIndexOrThrow("artist")
+        val descriptionIndex = getColumnIndexOrThrow("description")
+        val statusIndex = getColumnIndexOrThrow("status")
+
+        return DatabaseManga(
+            id = getLong(idIndex),
+            sourceId = getLong(sourceIndex),
+            title = getString(titleIndex),
+            thumbnailUrl = stringOrNull(thumbnailIndex),
+            author = stringOrNull(authorIndex),
+            artist = stringOrNull(artistIndex),
+            description = stringOrNull(descriptionIndex),
+            status = getInt(statusIndex),
+        )
+    }
+
+    private fun Cursor.toDatabaseChapter(): DatabaseChapter {
+        val idIndex = getColumnIndexOrThrow("_id")
+        val mangaIdIndex = getColumnIndexOrThrow("manga_id")
+        val urlIndex = getColumnIndexOrThrow("url")
+        val nameIndex = getColumnIndexOrThrow("name")
+        val scanlatorIndex = getColumnIndexOrThrow("scanlator")
+        val numberIndex = getColumnIndexOrThrow("chapter_number")
+        val uploadIndex = getColumnIndexOrThrow("date_upload")
+        val sourceOrderIndex = getColumnIndexOrThrow("source_order")
+
+        return DatabaseChapter(
+            id = getLong(idIndex),
+            mangaId = getLong(mangaIdIndex),
+            url = getString(urlIndex),
+            name = getString(nameIndex),
+            scanlator = stringOrNull(scanlatorIndex),
+            chapterNumber = getFloat(numberIndex),
+            dateUpload = getLong(uploadIndex),
+            sourceOrder = getLong(sourceOrderIndex),
+        )
+    }
+
+    private fun Cursor.stringOrNull(index: Int): String? = if (isNull(index)) null else getString(index)
 
     private fun hostSingleton(className: String): Any {
         val clazz = Class.forName(className, true, classLoader)
@@ -102,8 +187,5 @@ internal class ReadOnlyMihonBridge {
 
     companion object {
         private const val DATABASE_NAME = "tachiyomi.db"
-        private const val MAIN_ACTIVITY_CLASS = "eu.kanade.tachiyomi.ui.main.MainActivity"
-        private const val SHOW_MANGA_ACTION = "eu.kanade.tachiyomi.SHOW_MANGA"
-        private const val MANGA_EXTRA = "manga"
     }
 }
