@@ -60,11 +60,26 @@ internal class LocalReadInterceptor(
                         mangaName = decodePart(segments[2]),
                     )
 
-                    when (val target = repository.coverTarget(ref)) {
+                    repository.coverFileCandidates(ref).forEach { target ->
+                        val input = scanner.openInputStreamOrNull(target.uri)
+                            ?: return@forEach
+
+                        Log.d(
+                            TAG,
+                            "Cover file: ${ref.sourceName}/${ref.mangaName} -> ${target.name}",
+                        )
+                        return@runCatching streamResponse(
+                            chain = chain,
+                            source = input.source(),
+                            name = target.name,
+                        )
+                    }
+
+                    when (val target = repository.coverFallbackTarget(ref)) {
                         is LocalImageTarget.File -> {
                             Log.d(
                                 TAG,
-                                "Cover file: ${ref.sourceName}/${ref.mangaName} -> ${target.name}",
+                                "Cover file fallback: ${ref.sourceName}/${ref.mangaName} -> ${target.name}",
                             )
                             streamResponse(
                                 chain = chain,

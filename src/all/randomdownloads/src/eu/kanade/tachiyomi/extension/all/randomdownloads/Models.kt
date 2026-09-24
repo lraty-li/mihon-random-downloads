@@ -21,6 +21,7 @@ internal data class MangaRef(
 internal data class DownloadedManga(
     val ref: MangaRef,
     val uri: Uri,
+    val indexedChapterNames: Set<String>? = null,
 )
 
 internal data class ChapterRef(

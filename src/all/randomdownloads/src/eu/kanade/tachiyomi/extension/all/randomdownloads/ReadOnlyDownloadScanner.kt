@@ -23,14 +23,30 @@ internal class ReadOnlyDownloadScanner(
         get() = context.contentResolver
 
     fun downloadsRoot(): DocumentNode {
-        val treeUri = storageTreeUri()
-        val rootDocumentUri = DocumentsContract.buildDocumentUriUsingTree(
-            treeUri,
-            DocumentsContract.getTreeDocumentId(treeUri),
-        )
+        resolver.persistedUriPermissions
+            .asSequence()
+            .filter { it.isReadPermission }
+            .mapNotNull { permission ->
+                val treeUri = permission.uri
+                runCatching {
+                    val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+                    DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocumentId)
+                }.getOrNull()
+            }
+            .forEach { rootUri ->
+                val rootName = documentName(rootUri)
+                if (rootName.equals(DOWNLOADS_DIR, ignoreCase = true)) {
+                    return DocumentNode(
+                        uri = rootUri,
+                        name = rootName,
+                        isDirectory = true,
+                    )
+                }
 
-        return findDirectory(rootDocumentUri, DOWNLOADS_DIR)
-            ?: error("Mihon downloads directory was not found.")
+                findDirectory(rootUri, DOWNLOADS_DIR)?.let { return it }
+            }
+
+        error("Mihon downloads directory was not found in persisted storage permissions.")
     }
 
     fun listDirectories(parentUri: Uri): List<DocumentNode> = listChildren(parentUri).filter { it.isDirectory }
@@ -41,10 +57,10 @@ internal class ReadOnlyDownloadScanner(
     ): DocumentNode? = listDirectories(parentUri).firstOrNull { it.name == name }
 
     fun listChildren(parentUri: Uri): List<DocumentNode> {
-        val treeUri = storageTreeUri()
+        val documentId = DocumentsContract.getDocumentId(parentUri)
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
             parentUri,
-            DocumentsContract.getDocumentId(parentUri),
+            documentId,
         )
 
         val projection = arrayOf(
@@ -72,14 +88,14 @@ internal class ReadOnlyDownloadScanner(
                 )
 
                 while (cursor.moveToNext()) {
-                    val documentId = cursor.getString(idIndex)
+                    val childDocumentId = cursor.getString(idIndex)
                     val mimeType = cursor.getString(mimeIndex).orEmpty()
 
                     add(
                         DocumentNode(
                             uri = DocumentsContract.buildDocumentUriUsingTree(
-                                treeUri,
-                                documentId,
+                                parentUri,
+                                childDocumentId,
                             ),
                             name = cursor.getString(nameIndex).orEmpty(),
                             isDirectory = mimeType == DocumentsContract.Document.MIME_TYPE_DIR,
@@ -89,6 +105,24 @@ internal class ReadOnlyDownloadScanner(
             }
         }
     }
+
+    fun childDocumentUri(
+        parentUri: Uri,
+        childName: String,
+    ): Uri {
+        val parentDocumentId = DocumentsContract.getDocumentId(parentUri)
+        val childDocumentId = "$parentDocumentId/$childName"
+        return DocumentsContract.buildDocumentUriUsingTree(
+            parentUri,
+            childDocumentId,
+        )
+    }
+
+    fun documentName(uri: Uri): String = runCatching {
+        DocumentsContract.getDocumentId(uri)
+    }.getOrElse {
+        DocumentsContract.getTreeDocumentId(uri)
+    }.substringAfterLast('/')
 
     fun listImages(directoryUri: Uri): List<DocumentNode> = listChildren(directoryUri)
         .filter { !it.isDirectory && isImageName(it.name) }
@@ -129,6 +163,10 @@ internal class ReadOnlyDownloadScanner(
     fun openInputStream(uri: Uri): InputStream = resolver.openInputStream(uri)
         ?: error("Unable to open document: $uri")
 
+    fun openInputStreamOrNull(uri: Uri): InputStream? = runCatching {
+        resolver.openInputStream(uri)
+    }.getOrNull()
+
     fun openFileDescriptor(uri: Uri): ParcelFileDescriptor = resolver.openFileDescriptor(uri, "r")
         ?: error("Unable to open file descriptor: $uri")
 
@@ -155,31 +193,7 @@ internal class ReadOnlyDownloadScanner(
             .buffer()
     }
 
-    private fun storageTreeUri(): Uri {
-        val prefs = context.getSharedPreferences(
-            "${context.packageName}_preferences",
-            Context.MODE_PRIVATE,
-        )
-
-        val raw = sequenceOf(
-            prefs.getString(STORAGE_KEY, null),
-            prefs.getString(LEGACY_STORAGE_KEY, null),
-            prefs.all.entries
-                .firstOrNull { entry ->
-                    entry.key.endsWith("storage_dir") &&
-                        entry.value is String &&
-                        (entry.value as String).startsWith("content://")
-                }
-                ?.value as? String,
-        ).firstOrNull { !it.isNullOrBlank() }
-            ?: error("Mihon storage location is not configured.")
-
-        return Uri.parse(raw)
-    }
-
     companion object {
-        private const val STORAGE_KEY = "__APP_STATE_storage_dir"
-        private const val LEGACY_STORAGE_KEY = "storage_dir"
         private const val DOWNLOADS_DIR = "downloads"
     }
 }

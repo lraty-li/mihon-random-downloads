@@ -8,27 +8,31 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.source.online.HttpSource
 import keiyoushi.annotation.Source
-import keiyoushi.source.KeiSource
-import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 
 @Source
-abstract class RandomDownloads : KeiSource() {
+abstract class RandomDownloads : HttpSource() {
 
     private val repository = LocalDownloadRepository()
     private val localReadInterceptor = LocalReadInterceptor(repository)
 
+    override val client: OkHttpClient by lazy {
+        network.client
+            .newBuilder()
+            .addInterceptor(localReadInterceptor)
+            .build()
+    }
+
     override val supportsLatest: Boolean
         get() = true
-
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(localReadInterceptor)
 
     override suspend fun getPopularManga(page: Int): MangasPage = getRandomMangaPage(page, "popular")
 
     override suspend fun getLatestUpdates(page: Int): MangasPage = getRandomMangaPage(page, "latest")
 
-    override suspend fun getSearchMangaList(
+    override suspend fun getSearchManga(
         page: Int,
         query: String,
         filters: FilterList,
@@ -39,18 +43,13 @@ abstract class RandomDownloads : KeiSource() {
 
         return MangasPage(
             mangas = repository
-                .searchKnown(query, MAX_SEARCH_RESULTS)
+                .search(query, MAX_SEARCH_RESULTS)
                 .map(::toSManga),
             hasNextPage = false,
         )
     }
 
-    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        val ref = parseMangaUrl(url.encodedPath) ?: return null
-        return repository.resolveManga(ref)?.let(::toSManga)
-    }
-
-    override suspend fun fetchMangaUpdate(
+    override suspend fun getMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
         fetchDetails: Boolean,
@@ -68,6 +67,8 @@ abstract class RandomDownloads : KeiSource() {
             }
         } else {
             manga
+        }.apply {
+            initialized = true
         }
 
         val updatedChapters = if (fetchChapters) {
@@ -118,6 +119,10 @@ abstract class RandomDownloads : KeiSource() {
 
         return pages
     }
+
+    override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.url}"
+
+    override fun getChapterUrl(chapter: SChapter): String = "$baseUrl${chapter.url}"
 
     private fun getRandomMangaPage(
         page: Int,
