@@ -62,7 +62,17 @@ abstract class RandomDownloads : HttpSource() {
             ?: return SMangaUpdate(manga, chapters)
 
         val updatedManga = if (fetchDetails) {
+            val metadataStartedAt = SystemClock.elapsedRealtime()
+            val metadata = repository.metadata(ref)
+
+            Log.i(
+                TAG,
+                "Metadata details: hit=${metadata != null}, elapsed=${SystemClock.elapsedRealtime() - metadataStartedAt}ms",
+            )
+
             toSManga(local).apply {
+                author = metadata?.author
+                artist = metadata?.artist
                 description = "本地下载来源：${ref.sourceName}"
             }
         } else {

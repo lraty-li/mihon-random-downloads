@@ -118,6 +118,19 @@ cover.avif
 
 其他 SAF DocumentProvider 不假设 documentId 是路径，会使用标准 `listChildren()` 查找 cover。只有没有现成 cover 文件时，才继续回退到第一章第一张图片。
 
+## 漫画作者
+
+漫画详情的作者只在 Mihon 请求详情时读取，不参与随机池构建。
+
+优先级：
+
+1. 从最近最多 3 个下载章节读取 `ComicInfo.xml`；
+2. `Writer` 映射为作者，`Penciller` 映射为画师；
+3. 没有 `Writer` 时允许用 `Penciller` 作为作者显示；
+4. 没有 `ComicInfo.xml` 或其中没有作者信息时保持未知作者，不从标题猜测。
+
+CBZ 中的 `ComicInfo.xml` 通过现有 `keiyoushi.zip` 范围读取，不解压落盘；成功结果仅缓存于进程内存。
+
 ## CBZ
 
 CBZ 使用扩展框架公开的 `keiyoushi.zip`：
@@ -138,6 +151,6 @@ CBZ 使用扩展框架公开的 `keiyoushi.zip`：
 当前版本：
 
 ```text
-1.6.13
-src/all/randomdownloads/build/outputs/apk/debug/tachiyomi-all.randomdownloads-v1.6.13.apk
+1.6.14
+src/all/randomdownloads/build/outputs/apk/debug/tachiyomi-all.randomdownloads-v1.6.14.apk
 ```

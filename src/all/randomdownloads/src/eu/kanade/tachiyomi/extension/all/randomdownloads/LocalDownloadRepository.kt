@@ -1,11 +1,14 @@
 package eu.kanade.tachiyomi.extension.all.randomdownloads
 
 import android.net.Uri
+import java.util.concurrent.ConcurrentHashMap
 
 internal class LocalDownloadRepository(
     private val scanner: ReadOnlyDownloadScanner = ReadOnlyDownloadScanner(),
     private val index: MihonDownloadIndexCacheReader = MihonDownloadIndexCacheReader(scanner),
 ) {
+
+    private val metadataCache = ConcurrentHashMap<String, MangaMetadata>()
 
     fun random(limit: Int): List<DownloadedManga> = index.random(limit)
 
@@ -17,6 +20,17 @@ internal class LocalDownloadRepository(
     fun resolveManga(ref: MangaRef): DownloadedManga? = runCatching {
         index.find(ref)
     }.getOrNull()
+
+    fun metadata(ref: MangaRef): MangaMetadata? {
+        metadataCache[ref.mangaUrl]?.let { return it }
+
+        val manga = resolveManga(ref) ?: return null
+        val fromComicInfo = comicInfoMetadata(manga)
+            ?: return null
+
+        metadataCache[ref.mangaUrl] = fromComicInfo
+        return fromComicInfo
+    }
 
     fun listChapters(ref: MangaRef): List<DownloadedChapter> {
         val manga = resolveManga(ref) ?: return emptyList()
@@ -103,6 +117,34 @@ internal class LocalDownloadRepository(
 
     fun scanner(): ReadOnlyDownloadScanner = scanner
 
+    private fun comicInfoMetadata(manga: DownloadedManga): MangaMetadata? {
+        val chapters = scanner.listChildren(manga.uri)
+            .asSequence()
+            .filter { node -> isValidChapterNode(node, manga.indexedChapterNames) }
+            .sortedWith { left, right -> naturalCompare(right.name, left.name) }
+            .take(METADATA_CHAPTER_PROBES)
+
+        chapters.forEach { chapter ->
+            val xml = runCatching {
+                if (chapter.isDirectory) {
+                    scanner.readDirectoryTextEntry(
+                        directoryUri = chapter.uri,
+                        entryName = COMIC_INFO_FILE,
+                    )
+                } else {
+                    scanner.readArchiveTextEntry(
+                        archiveUri = chapter.uri,
+                        entryName = COMIC_INFO_FILE,
+                    )
+                }
+            }.getOrNull() ?: return@forEach
+
+            parseComicInfoMetadata(xml)?.let { return it }
+        }
+
+        return null
+    }
+
     private fun isValidChapterNode(
         node: DocumentNode,
         indexedChapterNames: Set<String>?,
@@ -137,6 +179,8 @@ internal class LocalDownloadRepository(
 
     companion object {
         private const val TEMP_DOWNLOAD_SUFFIX = "_tmp"
+        private const val COMIC_INFO_FILE = "ComicInfo.xml"
+        private const val METADATA_CHAPTER_PROBES = 3
 
         private val COVER_NAMES = listOf(
             "cover.jpg",

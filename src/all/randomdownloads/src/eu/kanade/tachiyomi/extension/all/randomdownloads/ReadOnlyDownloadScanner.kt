@@ -133,10 +133,7 @@ internal class ReadOnlyDownloadScanner(
         .sortedWith { left, right -> naturalCompare(left.name, right.name) }
 
     fun listArchiveImageEntries(archiveUri: Uri): List<ArchiveImageEntry> {
-        val directory = readZipDirectory(
-            totalSize = archiveSize(archiveUri),
-            fetch = { range -> rangeSource(archiveUri, range) },
-        )
+        val directory = archiveDirectory(archiveUri)
 
         return directory.entries
             .asSequence()
@@ -164,6 +161,41 @@ internal class ReadOnlyDownloadScanner(
         fetch = { range -> rangeSource(entry.archiveUri, range) },
     )
 
+    fun readDirectoryTextEntry(
+        directoryUri: Uri,
+        entryName: String,
+    ): String? {
+        val entry = listChildren(directoryUri)
+            .firstOrNull { node ->
+                !node.isDirectory &&
+                    node.name.equals(entryName, ignoreCase = true)
+            }
+            ?: return null
+
+        return openInputStream(entry.uri)
+            .bufferedReader()
+            .use { it.readText() }
+    }
+
+    fun readArchiveTextEntry(
+        archiveUri: Uri,
+        entryName: String,
+    ): String? {
+        val entry = archiveDirectory(archiveUri).entries
+            .firstOrNull { zipEntry ->
+                zipEntry.name.substringAfterLast('/')
+                    .equals(entryName, ignoreCase = true)
+            }
+            ?: return null
+
+        return readZipEntry(
+            entry = entry,
+            fetch = { range -> rangeSource(archiveUri, range) },
+        )
+            .buffer()
+            .use { it.readUtf8() }
+    }
+
     fun openInputStream(uri: Uri): InputStream = resolver.openInputStream(uri)
         ?: error("Unable to open document: $uri")
 
@@ -173,6 +205,11 @@ internal class ReadOnlyDownloadScanner(
 
     fun openFileDescriptor(uri: Uri): ParcelFileDescriptor = resolver.openFileDescriptor(uri, "r")
         ?: error("Unable to open file descriptor: $uri")
+
+    private fun archiveDirectory(uri: Uri) = readZipDirectory(
+        totalSize = archiveSize(uri),
+        fetch = { range -> rangeSource(uri, range) },
+    )
 
     private fun archiveSize(uri: Uri): Long = openFileDescriptor(uri).use { descriptor ->
         descriptor.statSize.takeIf { it >= 0L }
