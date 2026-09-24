@@ -5,9 +5,8 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import keiyoushi.utils.applicationContext
-import java.io.BufferedInputStream
+import java.io.Closeable
 import java.io.InputStream
-import java.util.zip.ZipInputStream
 
 internal class ReadOnlyDownloadScanner(
     private val context: Context = applicationContext,
@@ -89,48 +88,62 @@ internal class ReadOnlyDownloadScanner(
         .sortedWith { left, right -> naturalCompare(left.name, right.name) }
 
     fun listArchiveImageEntries(archiveUri: Uri): List<String> {
-        val entries = mutableListOf<String>()
-
-        openInputStream(archiveUri).use { raw ->
-            ZipInputStream(BufferedInputStream(raw)).use { zip ->
-                while (true) {
-                    val entry = zip.nextEntry ?: break
-                    try {
-                        if (!entry.isDirectory && isImageName(entry.name)) {
-                            entries += entry.name
-                        }
-                    } finally {
-                        zip.closeEntry()
-                    }
-                }
+        val entries = withArchiveReader(archiveUri) { reader ->
+            val useEntries = reader.javaClass.methods.first {
+                it.name == "useEntries" && it.parameterCount == 1
             }
+
+            @Suppress("UNCHECKED_CAST")
+            useEntries.invoke(
+                reader,
+                { sequence: Sequence<Any> ->
+                    sequence
+                        .mapNotNull(::archiveEntryName)
+                        .filter(::isImageName)
+                        .toList()
+                },
+            ) as List<String>
         }
 
         return entries.sortedWith(Comparator(::naturalCompare))
     }
 
-    fun firstArchiveImageEntry(archiveUri: Uri): String? {
-        openInputStream(archiveUri).use { raw ->
-            ZipInputStream(BufferedInputStream(raw)).use { zip ->
-                while (true) {
-                    val entry = zip.nextEntry ?: return null
-                    try {
-                        if (!entry.isDirectory && isImageName(entry.name)) {
-                            return entry.name
-                        }
-                    } finally {
-                        zip.closeEntry()
-                    }
-                }
-            }
-        }
-    }
+    fun firstArchiveImageEntry(archiveUri: Uri): String? = listArchiveImageEntries(archiveUri).firstOrNull()
 
     fun openInputStream(uri: Uri): InputStream = resolver.openInputStream(uri)
         ?: error("Unable to open document: $uri")
 
     fun openFileDescriptor(uri: Uri): ParcelFileDescriptor = resolver.openFileDescriptor(uri, "r")
         ?: error("Unable to open file descriptor: $uri")
+
+    private fun <T> withArchiveReader(
+        uri: Uri,
+        block: (Any) -> T,
+    ): T {
+        val pfd = openFileDescriptor(uri)
+        var reader: Any? = null
+
+        try {
+            val readerClass = Class.forName(
+                ARCHIVE_READER_CLASS,
+                true,
+                applicationContext.classLoader,
+            )
+
+            reader = readerClass
+                .getConstructor(ParcelFileDescriptor::class.java)
+                .newInstance(pfd)
+
+            return block(reader)
+        } finally {
+            runCatching { (reader as? Closeable)?.close() }
+            runCatching { pfd.close() }
+        }
+    }
+
+    private fun archiveEntryName(entry: Any): String? = runCatching {
+        entry.javaClass.getMethod("getName").invoke(entry) as? String
+    }.getOrNull()
 
     private fun storageTreeUri(): Uri {
         val prefs = context.getSharedPreferences(
@@ -155,6 +168,7 @@ internal class ReadOnlyDownloadScanner(
     }
 
     companion object {
+        private const val ARCHIVE_READER_CLASS = "mihon.core.archive.ArchiveReader"
         private const val STORAGE_KEY = "__APP_STATE_storage_dir"
         private const val LEGACY_STORAGE_KEY = "storage_dir"
         private const val DOWNLOADS_DIR = "downloads"

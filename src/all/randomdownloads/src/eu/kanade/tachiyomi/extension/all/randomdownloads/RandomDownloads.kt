@@ -20,30 +20,13 @@ abstract class RandomDownloads : KeiSource() {
     private val localReadInterceptor = LocalReadInterceptor(repository)
 
     override val supportsLatest: Boolean
-        get() = false
+        get() = true
 
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(localReadInterceptor)
 
-    override suspend fun getPopularManga(page: Int): MangasPage {
-        if (page != 1) {
-            return MangasPage(emptyList(), hasNextPage = false)
-        }
+    override suspend fun getPopularManga(page: Int): MangasPage = getRandomMangaPage(page, "popular")
 
-        val startedAt = SystemClock.elapsedRealtime()
-        val items = repository.random(RANDOM_PAGE_SIZE)
-
-        Log.i(
-            TAG,
-            "Random page: count=${items.size}, elapsed=${SystemClock.elapsedRealtime() - startedAt}ms",
-        )
-
-        return MangasPage(
-            mangas = items.map(::toSManga),
-            hasNextPage = false,
-        )
-    }
-
-    override suspend fun getLatestUpdates(page: Int): MangasPage = MangasPage(emptyList(), hasNextPage = false)
+    override suspend fun getLatestUpdates(page: Int): MangasPage = getRandomMangaPage(page, "latest")
 
     override suspend fun getSearchMangaList(
         page: Int,
@@ -108,7 +91,7 @@ abstract class RandomDownloads : KeiSource() {
         val local = repository.resolveChapter(ref)
             ?: error("Downloaded chapter no longer exists")
 
-        return if (local.isDirectory) {
+        val pages = if (local.isDirectory) {
             repository
                 .listFolderImages(local.uri)
                 .mapIndexed { index, image ->
@@ -127,6 +110,35 @@ abstract class RandomDownloads : KeiSource() {
                     )
                 }
         }
+
+        Log.i(
+            TAG,
+            "Page list: ${ref.documentName}, directory=${local.isDirectory}, count=${pages.size}",
+        )
+
+        return pages
+    }
+
+    private fun getRandomMangaPage(
+        page: Int,
+        lane: String,
+    ): MangasPage {
+        if (page != 1) {
+            return MangasPage(emptyList(), hasNextPage = false)
+        }
+
+        val startedAt = SystemClock.elapsedRealtime()
+        val items = repository.random(RANDOM_PAGE_SIZE)
+
+        Log.i(
+            TAG,
+            "Random page [$lane]: count=${items.size}, elapsed=${SystemClock.elapsedRealtime() - startedAt}ms",
+        )
+
+        return MangasPage(
+            mangas = items.map(::toSManga),
+            hasNextPage = false,
+        )
     }
 
     private fun toSManga(manga: DownloadedManga): SManga = SManga.create().apply {

@@ -1,4 +1,4 @@
-# Mihon Random Downloads
+﻿# Mihon Random Downloads
 
 Personal Mihon source extension that shows a random screen of already-downloaded manga.
 
@@ -68,16 +68,23 @@ entry is located; the entire archive is not extracted or copied.
 Current candidate:
 
 ```text
-src/all/randomdownloads/build/outputs/apk/debug/tachiyomi-all.randomdownloads-v1.6.6.apk
+src/all/randomdownloads/build/outputs/apk/debug/tachiyomi-all.randomdownloads-v1.6.8.apk
 ```
 
 ## Acceptance test
 
-1. Install/trust **Random Downloads 1.6.6**.
-2. Open **浏览 -> 图源 -> Random Downloads**.
+1. Install/trust **Random Downloads 1.6.8**.
+2. Open **娴忚 -> 鍥炬簮 -> Random Downloads**.
 3. Measure first random-page load.
 4. Refresh/re-enter and verify the next random page is fast.
 5. Open several manga and verify the details page no longer crashes.
 6. Verify only locally present chapters are listed.
 7. Open a CBZ chapter and flip through multiple pages.
 8. Confirm no download file is created, renamed, deleted, or modified by the extension.
+
+## Refresh behavior
+
+Mihon 0.20.4 does not expose a generic refresh button when a source has results. Random Downloads therefore exposes both **热门** and **最近更新**; both produce a fresh random batch. Switching between the two chips rebuilds the pager and rerolls the 20 manga.
+
+CBZ page enumeration uses Mihon's own ArchiveReader rather than Java ZipInputStream for SAF/archive compatibility.
+
