@@ -15,7 +15,7 @@ internal data class MangaRef(
         get() = "/m/${encodePart(sourceName)}/${encodePart(mangaName)}"
 
     val coverUrl: String
-        get() = "$LOCAL_ASSET_BASE/cover/${encodePart(sourceName)}/${encodePart(mangaName)}"
+        get() = "$LOCAL_ASSET_BASE/cover-v2/${encodePart(sourceName)}/${encodePart(mangaName)}"
 }
 
 internal data class DownloadedManga(

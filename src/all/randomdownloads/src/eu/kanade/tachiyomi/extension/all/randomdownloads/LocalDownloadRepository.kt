@@ -138,13 +138,37 @@ internal class LocalDownloadRepository(
     fun listArchiveImages(uri: Uri): List<String> = scanner.listArchiveImageEntries(uri)
 
     fun coverTarget(ref: MangaRef): LocalImageTarget? {
-        val chapter = listChapters(ref).firstOrNull() ?: return null
+        val manga = resolveManga(ref) ?: return null
+        val children = scanner.listChildren(manga.uri)
+
+        children
+            .firstOrNull { node ->
+                !node.isDirectory &&
+                    node.name.lowercase() in COVER_NAMES
+            }
+            ?.let { cover ->
+                return LocalImageTarget.File(
+                    uri = cover.uri,
+                    name = cover.name,
+                )
+            }
+
+        val chapter = children
+            .asSequence()
+            .filter {
+                it.isDirectory ||
+                    it.name.endsWith(".cbz", ignoreCase = true) ||
+                    it.name.endsWith(".zip", ignoreCase = true)
+            }
+            .sortedWith { left, right -> naturalCompare(left.name, right.name) }
+            .firstOrNull()
+            ?: return null
 
         return if (chapter.isDirectory) {
             val first = scanner.listImages(chapter.uri).firstOrNull() ?: return null
             LocalImageTarget.File(first.uri, first.name)
         } else {
-            val first = scanner.firstArchiveImageEntry(chapter.uri) ?: return null
+            val first = scanner.listArchiveImageEntries(chapter.uri).firstOrNull() ?: return null
             LocalImageTarget.ArchiveEntry(chapter.uri, first)
         }
     }
@@ -184,5 +208,13 @@ internal class LocalDownloadRepository(
     companion object {
         private const val TAG = "RandomDownloads"
         private const val PER_SOURCE_SAMPLE = 5
+
+        private val COVER_NAMES = setOf(
+            "cover.jpg",
+            "cover.jpeg",
+            "cover.png",
+            "cover.webp",
+            "cover.avif",
+        )
     }
 }
