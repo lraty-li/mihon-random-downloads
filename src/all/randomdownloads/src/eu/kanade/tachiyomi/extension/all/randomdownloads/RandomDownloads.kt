@@ -1,7 +1,9 @@
 package eu.kanade.tachiyomi.extension.all.randomdownloads
 
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.preference.Preference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.source.ConfigurableSource
@@ -57,7 +59,8 @@ abstract class RandomDownloads :
     override suspend fun getPageList(chapter: SChapter): List<Page> = emptyList()
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        val notice = Preference().apply {
+        Log.i(TAG, "Opening read-only settings UI")
+        val notice = newPreference(screen.context).apply {
             title = "随机已下载漫画（原条目）"
             summary =
                 "只读扫描 Mihon 现有下载目录，并打开数据库中原有的 Manga ID。" +
@@ -65,24 +68,24 @@ abstract class RandomDownloads :
             setEnabled(false)
         }
 
-        val shuffle = Preference().apply {
+        val shuffle = newPreference(screen.context).apply {
             title = "🎲 换一批"
             summary = "使用内存中的已识别列表重新随机 20 本"
         }
 
-        val rescan = Preference().apply {
+        val rescan = newPreference(screen.context).apply {
             title = "↻ 重新扫描下载目录"
             summary = "只读重新扫描；下载内容发生变化后使用"
         }
 
-        val status = Preference().apply {
+        val status = newPreference(screen.context).apply {
             title = "随机结果"
             summary = "尚未加载"
             setEnabled(false)
         }
 
         val resultPreferences = List(RANDOM_PAGE_SIZE) {
-            Preference().apply {
+            newPreference(screen.context).apply {
                 setVisible(false)
             }
         }
@@ -123,6 +126,7 @@ abstract class RandomDownloads :
                     rescan.setEnabled(true)
 
                     loaded.onSuccess { selection ->
+                        Log.i(TAG, "Read-only scan completed")
                         status.title = "随机结果"
                         status.summary = "共识别 ${selection.total} 本有下载漫画"
 
@@ -147,6 +151,7 @@ abstract class RandomDownloads :
                             status.summary = "可以点“重新扫描下载目录”再试一次"
                         }
                     }.onFailure { error ->
+                        Log.e(TAG, "Read-only scan failed", error)
                         status.title = "读取失败"
                         status.summary = error.message ?: error.javaClass.simpleName
                     }
@@ -167,7 +172,12 @@ abstract class RandomDownloads :
         render(rescanDirectories = true)
     }
 
+    private fun newPreference(context: Context): Preference = Preference::class.java
+        .getConstructor(Context::class.java)
+        .newInstance(context)
+
     companion object {
+        private const val TAG = "RandomDownloads"
         private const val RANDOM_PAGE_SIZE = 20
 
         private val executor = Executors.newSingleThreadExecutor { runnable ->

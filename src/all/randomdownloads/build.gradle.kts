@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Random Downloads"
-    versionCode = 3
+    versionCode = 4
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 
