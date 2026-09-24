@@ -97,7 +97,7 @@ SAF 仅用于：
 
 - 普通章节目录必须存在于 Mihon 下载索引；
 - CBZ 名称必须存在于 Mihon 下载索引；
-- `_temp` / `.tmp` / 隐藏目录会被排除；
+- `_tmp` / `.tmp` / 隐藏目录会被排除；
 - 手工 `.zip` 章节继续保留兼容。
 
 对 Mihon 未索引、由补充扫描发现的漫画，接受非临时章节目录、CBZ 和 ZIP。
@@ -114,9 +114,9 @@ cover.webp
 cover.avif
 ```
 
-正常漫画不会先执行 `listChildren()`；当前设备绝大多数漫画都能直接命中 `cover.jpg`。
+在 Android `com.android.externalstorage.documents` 上，封面使用路径型 documentId 快路径，正常漫画不会先执行 `listChildren()`；当前设备绝大多数漫画都能直接命中 `cover.jpg`。
 
-只有没有现成 cover 文件时，才枚举该漫画目录并回退到第一章第一张图片。
+其他 SAF DocumentProvider 不假设 documentId 是路径，会使用标准 `listChildren()` 查找 cover。只有没有现成 cover 文件时，才继续回退到第一章第一张图片。
 
 ## CBZ
 
@@ -138,6 +138,6 @@ CBZ 使用扩展框架公开的 `keiyoushi.zip`：
 当前版本：
 
 ```text
-1.6.12
-src/all/randomdownloads/build/outputs/apk/debug/tachiyomi-all.randomdownloads-v1.6.12.apk
+1.6.13
+src/all/randomdownloads/build/outputs/apk/debug/tachiyomi-all.randomdownloads-v1.6.13.apk
 ```

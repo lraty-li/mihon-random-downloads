@@ -58,18 +58,34 @@ internal class LocalDownloadRepository(
     fun coverFileCandidates(ref: MangaRef): List<LocalImageTarget.File> {
         val manga = resolveManga(ref) ?: return emptyList()
 
-        return COVER_NAMES.map { name ->
-            LocalImageTarget.File(
-                uri = scanner.childDocumentUri(manga.uri, name),
-                name = name,
-            )
+        return COVER_NAMES.mapNotNull { name ->
+            scanner.fastChildDocumentUriOrNull(manga.uri, name)
+                ?.let { uri ->
+                    LocalImageTarget.File(
+                        uri = uri,
+                        name = name,
+                    )
+                }
         }
     }
 
     fun coverFallbackTarget(ref: MangaRef): LocalImageTarget? {
         val manga = resolveManga(ref) ?: return null
+        val children = scanner.listChildren(manga.uri)
 
-        val chapter = scanner.listChildren(manga.uri)
+        children
+            .firstOrNull { node ->
+                !node.isDirectory &&
+                    node.name.lowercase() in COVER_NAMES
+            }
+            ?.let { cover ->
+                return LocalImageTarget.File(
+                    uri = cover.uri,
+                    name = cover.name,
+                )
+            }
+
+        val chapter = children
             .asSequence()
             .filter { node -> isValidChapterNode(node, manga.indexedChapterNames) }
             .sortedWith { left, right -> naturalCompare(left.name, right.name) }
@@ -120,7 +136,7 @@ internal class LocalDownloadRepository(
         name.lowercase() !in COVER_DIRECTORY_NAMES
 
     companion object {
-        private const val TEMP_DOWNLOAD_SUFFIX = "_temp"
+        private const val TEMP_DOWNLOAD_SUFFIX = "_tmp"
 
         private val COVER_NAMES = listOf(
             "cover.jpg",

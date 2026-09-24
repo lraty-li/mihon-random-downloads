@@ -106,10 +106,14 @@ internal class ReadOnlyDownloadScanner(
         }
     }
 
-    fun childDocumentUri(
+    fun fastChildDocumentUriOrNull(
         parentUri: Uri,
         childName: String,
-    ): Uri {
+    ): Uri? {
+        if (parentUri.authority != EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY) {
+            return null
+        }
+
         val parentDocumentId = DocumentsContract.getDocumentId(parentUri)
         val childDocumentId = "$parentDocumentId/$childName"
         return DocumentsContract.buildDocumentUriUsingTree(
@@ -195,5 +199,7 @@ internal class ReadOnlyDownloadScanner(
 
     companion object {
         private const val DOWNLOADS_DIR = "downloads"
+        private const val EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY =
+            "com.android.externalstorage.documents"
     }
 }
