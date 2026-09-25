@@ -4,7 +4,7 @@
 
 它不会从网络搜索漫画，而是从 Mihon 已经下载到本机的漫画中随机抽取一屏（默认 20 本），可直接进入本地章节并使用 Mihon Reader 阅读。
 
-> 当前版本：**1.6.14**
+> 当前版本：**1.6.15**
 >
 > 已在 **Mihon 0.20.4** 上验证。
 
@@ -100,7 +100,7 @@ APK 输出：
 
 ```text
 src/all/randomdownloads/build/outputs/apk/debug/
-tachiyomi-all.randomdownloads-v1.6.14.apk
+tachiyomi-all.randomdownloads-v1.6.15.apk
 ```
 
 本机 Android SDK 路径应写在未提交的 `local.properties`：
